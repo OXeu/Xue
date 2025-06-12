@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/OXeu/xue/internal/log"
+	"github.com/OXeu/Xue/internal/log"
 	"github.com/goccy/go-yaml"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"

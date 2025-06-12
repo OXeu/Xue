@@ -1,9 +1,9 @@
 package label
 
 import (
-	"github.com/OXeu/xue/internal/llm"
-	"github.com/OXeu/xue/internal/log"
-	"github.com/OXeu/xue/internal/utils"
+	"github.com/OXeu/Xue/internal/llm"
+	"github.com/OXeu/Xue/internal/log"
+	"github.com/OXeu/Xue/internal/utils"
 	"go.uber.org/zap"
 	"sync"
 )

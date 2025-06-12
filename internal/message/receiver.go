@@ -3,10 +3,10 @@ package message
 import (
 	"encoding/json"
 	"github.com/LagrangeDev/LagrangeGo/message"
-	face2 "github.com/OXeu/xue/internal/face"
-	"github.com/OXeu/xue/internal/history"
-	"github.com/OXeu/xue/internal/message/element"
-	"github.com/OXeu/xue/internal/message/protocol"
+	face2 "github.com/OXeu/Xue/internal/face"
+	"github.com/OXeu/Xue/internal/message/element"
+	"github.com/OXeu/Xue/internal/message/protocol"
+	"github.com/OXeu/Xue/internal/utils"
 	"log"
 )
 
@@ -35,8 +35,7 @@ func (r *Receiver) Start() {
 			ReplyTo: replyId,
 			Content: generalMsgContent,
 		}
-		history.GetHistory().Write(&generalMsg)
-		history.GetEmbedding().Write(&generalMsg)
+		utils.Bus.Publish(utils.RECV_MSG, generalMsg)
 	}
 }
 
@@ -57,14 +56,14 @@ func convertMessageElement(ele message.IMessageElement) (element.Element, uint32
 	switch ele.(type) {
 	case *message.TextElement:
 		text := ele.(*message.TextElement)
-		return text.Content, 0
+		return element.Text(text.Content), 0
 	case *message.ReplyElement:
 		reply := ele.(*message.ReplyElement)
 		msg, _ := convertMessage(reply.Elements)
-		return element.ReplyMsg{Msg: msg, ReplyMsgId: reply.ReplySeq}, reply.ReplySeq
+		return element.ReplyMsg{Msg: msg, ReplyMsgId: reply.ReplySeq, Origin: reply}, reply.ReplySeq
 	case *message.AtElement:
 		at := ele.(*message.AtElement)
-		return element.AtMsg{Uin: at.TargetUin, Name: at.Display}, 0
+		return element.AtMsg{Uin: at.TargetUin, Name: at.Display, Origin: at}, 0
 	case *message.ImageElement:
 		image := ele.(*message.ImageElement)
 		if image.SubType == 1 {
@@ -86,12 +85,12 @@ func convertMessageElement(ele message.IMessageElement) (element.Element, uint32
 		return nil, 0
 	case *message.ForwardMessage:
 		forward := ele.(*message.ForwardMessage)
-		elements := make([]element.Element, 0)
+		elements := make([][]element.Element, 0)
 		for _, node := range forward.Nodes {
 			data, _ := convertMessage(node.Message)
 			elements = append(elements, data)
 		}
-		return element.ForwardMsg{Elements: elements}, 0
+		return element.ForwardMsg{Elements: elements, Origin: forward}, 0
 	case *message.MarketFaceElement:
 		face := ele.(*message.MarketFaceElement)
 		return element.CustomFaceElement{Alt: face.Summary, Url: ""}, 0

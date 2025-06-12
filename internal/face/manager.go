@@ -2,8 +2,8 @@ package face
 
 import (
 	"encoding/json"
-	"github.com/OXeu/xue/internal/idle"
-	"github.com/OXeu/xue/internal/message/element"
+	"github.com/OXeu/Xue/internal/idle"
+	"github.com/OXeu/Xue/internal/message/element"
 	"strings"
 	"sync"
 )

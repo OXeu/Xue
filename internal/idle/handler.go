@@ -2,8 +2,8 @@ package idle
 
 import (
 	"encoding/json"
-	"github.com/OXeu/xue/internal/message/element"
-	"github.com/OXeu/xue/internal/utils"
+	"github.com/OXeu/Xue/internal/message/element"
+	"github.com/OXeu/Xue/internal/utils"
 	"sync"
 	"time"
 )

@@ -6,7 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/OXeu/xue/internal/log"
+	"github.com/OXeu/Xue/internal/log"
 	"io"
 	"math/rand"
 	"os"

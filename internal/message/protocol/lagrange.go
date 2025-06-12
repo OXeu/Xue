@@ -7,7 +7,8 @@ import (
 	"github.com/LagrangeDev/LagrangeGo/client/auth"
 	"github.com/LagrangeDev/LagrangeGo/message"
 	"github.com/LagrangeDev/LagrangeGo/utils"
-	"github.com/OXeu/xue/internal/message/element"
+	"github.com/OXeu/Xue/internal/message/element"
+	utils2 "github.com/OXeu/Xue/internal/utils"
 	"github.com/mattn/go-colorable"
 	"github.com/sirupsen/logrus"
 	"os"
@@ -20,7 +21,7 @@ import (
 )
 
 type Lagrange struct {
-	qqClient       *client.QQClient
+	QqClient       *client.QQClient
 	GroupMessage   chan *message.GroupMessage
 	PrivateMessage chan *message.PrivateMessage
 	Sender         chan element.SendMessage
@@ -32,7 +33,7 @@ var instance *Lagrange
 func GetLagrange() *Lagrange {
 	once.Do(func() {
 		instance = &Lagrange{
-			qqClient:       client.NewClientEmpty(),
+			QqClient:       client.NewClientEmpty(),
 			GroupMessage:   make(chan *message.GroupMessage, 100),
 			PrivateMessage: make(chan *message.PrivateMessage, 100),
 			Sender:         make(chan element.SendMessage, 100),
@@ -58,10 +59,10 @@ func (l *Lagrange) Start() {
 		KernelVersion: "10.0.19042.0",
 	}
 
-	l.qqClient.SetLogger(protocolLogger{})
-	l.qqClient.UseVersion(appInfo)
-	l.qqClient.AddSignServer("https://sign.lagrangecore.org/api/sign/30366")
-	l.qqClient.UseDevice(&deviceInfo)
+	l.QqClient.SetLogger(protocolLogger{})
+	l.QqClient.UseVersion(appInfo)
+	l.QqClient.AddSignServer("https://sign.lagrangecore.org/api/sign/30366")
+	l.QqClient.UseDevice(&deviceInfo)
 
 	// 从保存的sig.bin文件读取登录信息
 	data, err := os.ReadFile("data/sig.bin")
@@ -74,20 +75,20 @@ func (l *Lagrange) Start() {
 			logrus.Warnln("反序列化签名错误:", err)
 		} else {
 			// 如果登录信息有效，则使用登录信息登录
-			l.qqClient.UseSig(sig)
+			l.QqClient.UseSig(sig)
 		}
 	}
 
 	// 订阅群消息事件
-	l.qqClient.GroupMessageEvent.Subscribe(func(client *client.QQClient, event *message.GroupMessage) {
+	l.QqClient.GroupMessageEvent.Subscribe(func(client *client.QQClient, event *message.GroupMessage) {
 		l.GroupMessage <- event
 	})
 
-	l.qqClient.PrivateMessageEvent.Subscribe(func(client *client.QQClient, event *message.PrivateMessage) {
+	l.QqClient.PrivateMessageEvent.Subscribe(func(client *client.QQClient, event *message.PrivateMessage) {
 		l.PrivateMessage <- event
 	})
 
-	l.qqClient.DisconnectedEvent.Subscribe(func(client *client.QQClient, event *client.DisconnectedEvent) {
+	l.QqClient.DisconnectedEvent.Subscribe(func(client *client.QQClient, event *client.DisconnectedEvent) {
 		logger.Infof("连接已断开：%v", event.Message)
 	})
 
@@ -132,7 +133,7 @@ func (l *Lagrange) Start() {
 		// 扫码完成后就可以进行登录
 		_, err = c.QRCodeLogin()
 		return err
-	}(l.qqClient)
+	}(l.QqClient)
 
 	if err != nil {
 		logger.Errorln("登录失败:", err)
@@ -144,12 +145,12 @@ func (l *Lagrange) Start() {
 		for msg := range l.Sender {
 			// 处理发送消息的逻辑
 			if msg.IsPrivate {
-				_, err = l.qqClient.SendPrivateMessage(msg.Uin, msg.ToLagrangeMessage())
+				_, err = l.QqClient.SendPrivateMessage(msg.Uin, msg.ToLagrangeMessage())
 				if err != nil {
 					logger.Errorf("发送单聊消息失败: %v", err)
 				}
 			} else {
-				_, err = l.qqClient.SendGroupMessage(msg.Uin, msg.ToLagrangeMessage())
+				_, err = l.QqClient.SendGroupMessage(msg.Uin, msg.ToLagrangeMessage())
 				if err != nil {
 					logger.Errorf("发送群聊消息失败: %v", err)
 				}
@@ -157,10 +158,10 @@ func (l *Lagrange) Start() {
 		}
 	}()
 
-	defer l.qqClient.Release()
+	defer l.QqClient.Release()
 	defer func() {
 		// 序列化登录信息以便下次使用
-		data, err = l.qqClient.Sig().Marshal()
+		data, err = l.QqClient.Sig().Marshal()
 		if err != nil {
 			logger.Errorln("序列化签名错误:", err)
 			return
@@ -172,8 +173,13 @@ func (l *Lagrange) Start() {
 		}
 		logger.Infoln("签名已保存至 sig.bin")
 	}()
+
+	utils2.Bus.Publish(utils2.STARTED)
 	mc := make(chan os.Signal, 2)
 	signal.Notify(mc, os.Interrupt, syscall.SIGTERM)
+	_ = utils2.Bus.Subscribe(utils2.STOPPED, func() {
+		mc <- os.Interrupt
+	})
 	for {
 		switch <-mc {
 		case os.Interrupt, syscall.SIGTERM:

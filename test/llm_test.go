@@ -1,7 +1,7 @@
 package test
 
 import (
-	"github.com/OXeu/xue/internal/llm"
+	"github.com/OXeu/Xue/internal/llm"
 	"strings"
 	"testing"
 )

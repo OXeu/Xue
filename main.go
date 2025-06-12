@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/OXeu/xue/internal/message"
-	"github.com/OXeu/xue/internal/message/protocol"
+	"github.com/OXeu/Xue/internal/message"
+	"github.com/OXeu/Xue/internal/message/protocol"
 	"os"
 	"os/signal"
 	"syscall"

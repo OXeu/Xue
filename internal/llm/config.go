@@ -2,7 +2,7 @@ package llm
 
 import (
 	"errors"
-	"github.com/OXeu/xue/internal/log"
+	"github.com/OXeu/Xue/internal/log"
 	"io"
 	"os"
 )

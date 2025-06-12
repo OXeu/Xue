@@ -7,8 +7,8 @@ import (
 	"os"
 )
 
-func (e *CustomFaceElement) Prefetch() error {
-	md5Name := utils.Md5String(e.Url)
+func (i *Image) Prefetch() error {
+	md5Name := utils.Md5String(i.Url)
 	path := "data/" + md5Name + ".png"
 	exists, err := utils.FileExists(path)
 	if err != nil {
@@ -20,7 +20,7 @@ func (e *CustomFaceElement) Prefetch() error {
 			return err
 		}
 		// 下载
-		response, err := http.Get(e.Url)
+		response, err := http.Get(i.Url)
 		if err != nil {
 			return err
 		}
@@ -34,12 +34,12 @@ func (e *CustomFaceElement) Prefetch() error {
 	return nil
 }
 
-func (e *CustomFaceElement) GetImage() ([]byte, error) {
-	err := e.Prefetch()
+func (i *Image) GetImage() ([]byte, error) {
+	err := i.Prefetch()
 	if err != nil {
 		return nil, err
 	}
-	md5Name := utils.Md5String(e.Url)
+	md5Name := utils.Md5String(i.Url)
 	path := "data/" + md5Name + "png"
 	file, err := os.Create(path)
 	if err != nil {
