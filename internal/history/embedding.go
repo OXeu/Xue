@@ -8,7 +8,6 @@ import (
 	"github.com/OXeu/Xue/internal/message/element"
 	"github.com/OXeu/Xue/internal/utils"
 	"github.com/philippgille/chromem-go"
-	"go.uber.org/zap"
 	"strconv"
 	"sync"
 )
@@ -48,7 +47,7 @@ func GetEmbedding() *Embedding {
 func (e *Embedding) Start() {
 	err := utils.Bus.Subscribe(utils.RECV_MSG, e.write)
 	if err != nil {
-		log.Error("Embedding", "subscribe recv msg error", zap.Error(err))
+		log.Logger.Errorln("[Embedding] subscribe recv msg error:", err)
 		return
 	}
 }
@@ -64,14 +63,14 @@ func (e Embedding) write(msg *element.Message) {
 		},
 	})
 	if err != nil {
-		log.Error("Embedding", "add document err", zap.Error(err))
+		log.Logger.Errorln("[Embedding] add document err:", err)
 	}
 }
 
 func (e Embedding) RecallMsg(msg *element.Message) ([]element.Message, error) {
 	results, err := e.Collection.Query(e.Ctx, msg.JsonContent(), 10, nil, nil)
 	if err != nil {
-		log.Error("Embedding", "recall query err", zap.Error(err))
+		log.Logger.Errorln("[Embedding] recall query err:", err)
 		return nil, err
 	}
 	messages := make([]element.Message, 0)
@@ -79,7 +78,7 @@ func (e Embedding) RecallMsg(msg *element.Message) ([]element.Message, error) {
 		var recallMsg element.Message
 		err := json.Unmarshal([]byte(result.Content), &recallMsg)
 		if err != nil {
-			log.Error("Embedding", "json unmarshal err", zap.Error(err))
+			log.Logger.Errorln("[Embedding] json unmarshal err:", err)
 			continue
 		}
 		messages = append(messages, recallMsg)

@@ -35,7 +35,7 @@ func getConfigYaml() ([]byte, error) {
 		if err != nil {
 			return nil
 		}
-		log.Info("LLM", "finding config file at: "+wd+"/"+name)
+		log.Logger.Infoln("[LLM] finding config file at: " + wd + "/" + name)
 		if err != nil {
 			return nil
 		}

@@ -32,7 +32,7 @@ func GetLabelHandler() *Handler {
 func (h *Handler) Start() {
 	err := utils.Bus.Subscribe("label", handleLabelTask)
 	if err != nil {
-		log.Error("label", "subscribe label failed", zap.Error(err))
+		log.Logger.Errorln("[label] subscribe label failed:", err)
 		return
 	}
 }

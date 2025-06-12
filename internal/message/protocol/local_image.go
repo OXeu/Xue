@@ -5,7 +5,6 @@ import (
 	"github.com/LagrangeDev/LagrangeGo/message"
 	"github.com/OXeu/Xue/internal/log"
 	"github.com/OXeu/Xue/internal/utils"
-	"go.uber.org/zap"
 )
 
 type LocalImage struct {
@@ -25,7 +24,7 @@ func (l LocalImage) ToLagrangeMessage() message.IMessageElement {
 	}
 	uploadImage, err := GetLagrange().QqClient.UploadImage(l.Source, &image)
 	if err != nil {
-		log.Error("LocalImage", "upload error", zap.Error(err))
+		log.Logger.Errorln("[LocalImage] upload error:", err)
 		return nil
 	}
 	return uploadImage

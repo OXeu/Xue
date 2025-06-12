@@ -4,7 +4,7 @@ go 1.24
 
 require (
 	github.com/LagrangeDev/LagrangeGo v0.1.4-0.20250425071607-d863dd7e9d64
-	github.com/asaskevich/EventBus v0.0.0-20200907212545-49d423059eef
+	github.com/danielhookx/eventbus v0.0.0-20240409135312-6bc196392845
 	github.com/dgraph-io/badger/v4 v4.7.0
 	github.com/goccy/go-yaml v1.18.0
 	github.com/mattn/go-colorable v0.1.14
@@ -20,6 +20,8 @@ require (
 	github.com/RomiChan/protobuf v0.1.1-0.20230204044148-2ed269a2e54d // indirect
 	github.com/RomiChan/syncx v0.0.0-20240418144900-b7402ffdebc7 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/danielhookx/fission v0.1.0 // indirect
+	github.com/danielhookx/xcontainer v0.1.0 // indirect
 	github.com/dgraph-io/ristretto/v2 v2.2.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fumiama/gofastTEA v0.1.3 // indirect

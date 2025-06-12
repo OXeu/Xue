@@ -8,7 +8,6 @@ import (
 	"github.com/goccy/go-yaml"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
-	"go.uber.org/zap"
 	"sync"
 )
 
@@ -68,14 +67,14 @@ func (m *Manager) Chat(ability uint8, prompt string, msg ...Msg) (*Response, err
 				Model:    model.Model,
 			})
 			if err != nil {
-				log.Error("Chat", "request chat error", zap.Error(err))
+				log.Logger.Errorln("[Chat] request chat error:", err)
 				continue
 			}
 			var respNew Response
 			resp := chatCompletion.Choices[0].Message
 			err = json.Unmarshal([]byte(resp.RawJSON()), &respNew)
 			if err != nil {
-				log.Error("Chat", "unmarshal Error", zap.Error(err))
+				log.Logger.Errorln("[Chat] unmarshal Error:", err)
 				return nil, err
 			}
 			return &respNew, nil

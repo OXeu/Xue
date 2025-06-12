@@ -21,13 +21,13 @@ func DiskQueueLog(lvl LogLevel, f string, args ...interface{}) {
 	msg := fmt.Sprintf(f, args...)
 	switch lvl {
 	case DEBUG:
-		log.Debug("DiskQueue", msg)
+		log.Logger.Debugln("[DiskQueue]", msg)
 	case INFO:
-		log.Info("DiskQueue", msg)
+		log.Logger.Infoln("[DiskQueue] ", msg)
 	case WARN:
-		log.Warn("DiskQueue", msg)
+		log.Logger.Warnln("[DiskQueue]", msg)
 	case ERROR:
-		log.Error("DiskQueue", msg)
+		log.Logger.Errorln("[DiskQueue]", msg)
 	}
 }
 

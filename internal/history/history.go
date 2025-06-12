@@ -4,7 +4,6 @@ import (
 	"github.com/OXeu/Xue/internal/log"
 	"github.com/OXeu/Xue/internal/message/element"
 	"github.com/OXeu/Xue/internal/utils"
-	"go.uber.org/zap"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"sync"
@@ -27,12 +26,12 @@ func GetHistory() *History {
 		db, err := gorm.Open(sqlite.Open("data/history.db"), &gorm.Config{})
 		if err != nil {
 			if err != nil {
-				log.Error("history", "failed to connect database", zap.Error(err))
+				log.Logger.Errorln("[history] failed to connect database:", err)
 			}
 		}
 		err = db.AutoMigrate(&element.Message{})
 		if err != nil {
-			log.Error("history", "failed to migrate", zap.Error(err))
+			log.Logger.Errorln("[history] failed to migrate:", err)
 		}
 		history = &History{
 			Db: db,
@@ -44,7 +43,7 @@ func GetHistory() *History {
 func (h *History) Start() {
 	err := utils.Bus.Subscribe(utils.RECV_MSG, h.write)
 	if err != nil {
-		log.Error("history", "subscribe recv msg error", zap.Error(err))
+		log.Logger.Errorln("[history] subscribe recv msg error:", err)
 		return
 	}
 }
