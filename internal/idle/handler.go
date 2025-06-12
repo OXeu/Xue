@@ -49,7 +49,7 @@ func (h *Handler) Start() {
 		if err != nil {
 			continue
 		}
-		utils.Bus.Publish(utils.LABEL_EMOJI, emojiMsg.Id, image, "emoji")
+		utils.Bus.Publish(utils.LabelEmoji, emojiMsg.Id, image, "emoji")
 	}
 }
 

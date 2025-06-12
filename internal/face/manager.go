@@ -43,12 +43,12 @@ func GetFaceManager() *Manager {
 func (m Manager) Start() {
 	log.Logger.Infoln("[FaceManager]", "start")
 	go func() {
-		err := utils.Bus.Subscribe(utils.RECV_EMOJI, m.ReceiveFace)
+		err := utils.Bus.Subscribe(utils.ReceiveEmoji, m.ReceiveFace)
 		if err != nil {
 			log.Logger.Error("[FaceManager]", "subscribe RECV_EMOJI error", err)
 		}
 	}()
-	err := utils.Bus.Subscribe(utils.LABELED_EMOJI, m.SaveFace)
+	err := utils.Bus.Subscribe(utils.LabeledEmoji, m.SaveFace)
 	if err != nil {
 		log.Logger.Error("[FaceManager]", "subscribe LABELED_EMOJI error", err)
 	}

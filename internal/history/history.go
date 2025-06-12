@@ -41,7 +41,7 @@ func GetHistory() *History {
 }
 
 func (h *History) Start() {
-	err := utils.Bus.Subscribe(utils.RECV_MSG, h.write)
+	err := utils.Bus.Subscribe(utils.ReceiveMsg, h.write)
 	if err != nil {
 		log.Logger.Errorln("[history] subscribe recv msg error:", err)
 		return

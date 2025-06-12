@@ -6,6 +6,7 @@ import (
 	"github.com/OXeu/Xue/internal/idle"
 	"github.com/OXeu/Xue/internal/label"
 	"github.com/OXeu/Xue/internal/message/protocol"
+	"github.com/OXeu/Xue/internal/reactor"
 	"os"
 	"os/signal"
 	"syscall"
@@ -19,6 +20,9 @@ func main() {
 	go history.GetHistory().Start()
 	go idle.GetIdleHandler().Start()
 	go label.GetLabelHandler().Start()
+	go reactor.GetInternal().Start()
+	go reactor.GetReactor().Start()
+	go reactor.GetResponser().Start()
 
 	// 主程序循环
 	mc := make(chan os.Signal, 2)

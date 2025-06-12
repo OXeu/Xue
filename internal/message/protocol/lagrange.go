@@ -86,7 +86,7 @@ func (l *Lagrange) Start() {
 			ReplyTo: replyId,
 			Content: generalMsgContent,
 		}
-		utils2.Bus.Publish(utils2.RECV_MSG, &generalMsg)
+		utils2.Bus.Publish(utils2.ReceiveMsg, &generalMsg)
 	})
 
 	l.QqClient.PrivateMessageEvent.Subscribe(func(client *client.QQClient, msg *message.PrivateMessage) {
@@ -103,7 +103,7 @@ func (l *Lagrange) Start() {
 			ReplyTo: replyId,
 			Content: generalMsgContent,
 		}
-		utils2.Bus.Publish(utils2.RECV_MSG, &generalMsg)
+		utils2.Bus.Publish(utils2.ReceiveMsg, &generalMsg)
 	})
 
 	l.QqClient.DisconnectedEvent.Subscribe(func(client *client.QQClient, event *client.DisconnectedEvent) {
@@ -160,20 +160,20 @@ func (l *Lagrange) Start() {
 	log.Logger.Infoln("登录成功")
 
 	go func() {
-		err := utils2.Bus.Subscribe(utils2.SEND_MSG, func(msg *element.SendMessage) {
+		err := utils2.Bus.Subscribe(utils2.SendMsg, func(msg *element.SendMessage) {
 			// 处理发送消息的逻辑
 			if msg.IsPrivate {
 				_, err = l.QqClient.SendPrivateMessage(msg.Uin, msg.ToLagrangeMessage())
 				if err != nil {
 					log.Logger.Errorf("发送单聊消息失败: %v", err)
 				}
-				utils2.Bus.Publish(utils2.SENDED_MSG, msg)
+				utils2.Bus.Publish(utils2.SentMsg, msg)
 			} else {
 				_, err = l.QqClient.SendGroupMessage(msg.Uin, msg.ToLagrangeMessage())
 				if err != nil {
 					log.Logger.Errorf("发送群聊消息失败: %v", err)
 				}
-				utils2.Bus.Publish(utils2.SENDED_MSG, msg)
+				utils2.Bus.Publish(utils2.SentMsg, msg)
 			}
 		})
 		if err != nil {
@@ -242,7 +242,7 @@ func convertMessageElement(ele message.IMessageElement) (element.Element, uint32
 			// 表情
 			face := element.CustomFaceElement{Url: image.URL, Id: image.ImageID, Md5: hex.EncodeToString(image.Md5)}
 			log.Logger.Info("[Lagrange]", "接收到表情", face.Id, face.Url, image.Summary)
-			utils2.Bus.Publish(utils2.RECV_EMOJI, &face)
+			utils2.Bus.Publish(utils2.ReceiveEmoji, &face)
 			return face, 0
 		} else {
 			// 图片

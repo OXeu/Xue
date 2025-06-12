@@ -7,12 +7,15 @@ import (
 var Bus = eventbus.New()
 
 const (
-	STARTED       = "started"
-	RECV_MSG      = "receive_message"
-	SEND_MSG      = "send_message"
-	SENDED_MSG    = "sended_message"
-	LABEL_EMOJI   = "label_emoji"
-	LABELED_EMOJI = "labeled_emoji"
-	STOPPED       = "stopped"
-	RECV_EMOJI    = "receive_emoji"
+	STARTED      = "started"
+	ReceiveMsg   = "receive_message"
+	PreSendMsg   = "pre_send_message"
+	SendMsg      = "send_message"
+	SentMsg      = "sent_message"
+	ReplyMsg     = "reply_message"
+	LabelEmoji   = "label_emoji"
+	LabeledEmoji = "labeled_emoji"
+	STOPPED      = "stopped"
+	ReceiveEmoji = "receive_emoji"
+	PlanChanged  = "plan_changed"
 )

@@ -17,7 +17,7 @@ func TestSendPriMsg(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		utils.Bus.Publish(utils.SEND_MSG, &element.SendMessage{
+		utils.Bus.Publish(utils.SendMsg, &element.SendMessage{
 			Uin:       1573856599,
 			IsPrivate: true,
 			Element: &[]element.Element{
@@ -31,7 +31,7 @@ func TestSendPriMsg(t *testing.T) {
 				},
 			},
 		})
-		_ = utils.Bus.Subscribe(utils.SENDED_MSG, func(msg *element.SendMessage) {
+		_ = utils.Bus.Subscribe(utils.SentMsg, func(msg *element.SendMessage) {
 			utils.Bus.Publish(utils.STOPPED)
 		})
 	})

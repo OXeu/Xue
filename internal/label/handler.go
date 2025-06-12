@@ -30,7 +30,7 @@ func GetLabelHandler() *Handler {
 }
 
 func (h *Handler) Start() {
-	err := utils.Bus.Subscribe(utils.LABEL_EMOJI, handleLabelTask)
+	err := utils.Bus.Subscribe(utils.LabelEmoji, handleLabelTask)
 	if err != nil {
 		log.Logger.Errorln("[label] subscribe label failed:", err)
 		return
@@ -54,7 +54,7 @@ func handleLabelTask(id string, image []byte, type_ string) {
 		labelText = strings.Split(labelText, "】")[0]
 	}
 	log.Logger.Debugln("[Label]", "desc: ", label.Content, "label:", labelText)
-	utils.Bus.Publish(utils.LABELED_EMOJI, id, labelText)
+	utils.Bus.Publish(utils.LabeledEmoji, id, labelText)
 }
 
 // Wandering 处理器，结合闲时处理任务（相关时）为 bot 生成当前手头正在进行的工作

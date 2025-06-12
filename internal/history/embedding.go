@@ -59,7 +59,7 @@ func GetEmbedding() *Embedding {
 }
 
 func (e *Embedding) Start() {
-	err := utils.Bus.Subscribe(utils.RECV_MSG, e.write)
+	err := utils.Bus.Subscribe(utils.ReceiveMsg, e.write)
 	if err != nil {
 		log.Logger.Errorln("[Embedding] subscribe recv msg error:", err)
 		return

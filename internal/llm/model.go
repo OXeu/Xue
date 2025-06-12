@@ -59,6 +59,7 @@ func GetLLMManager() *Manager {
 func (m *Manager) Chat(ability uint8, prompt string, msg ...Msg) (*Response, error) {
 	for _, model := range m.Models {
 		if model.Ability&ability != 0 {
+			log.Logger.Infoln("[Chat] using model:", model.Model)
 			var msgUnions []openai.ChatCompletionMessageParamUnion
 			if len(prompt) != 0 {
 				msgUnions = append(msgUnions, openai.SystemMessage(prompt))
