@@ -24,7 +24,7 @@ const (
 var Logger = logrus.New()
 
 func init() {
-	Logger.SetLevel(logrus.TraceLevel)
+	Logger.SetLevel(logrus.InfoLevel)
 	Logger.SetFormatter(&ColoredFormatter{})
 	Logger.SetOutput(colorable.NewColorableStdout())
 }
@@ -50,8 +50,8 @@ func (f *ColoredFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 		levelColor = colorWhite
 	}
 
-	return utils.S2B(fmt.Sprintf("[%s] [%s%s%s]: %s\n",
-		timestamp, levelColor, strings.ToUpper(entry.Level.String()), colorReset, entry.Message)), nil
+	return utils.S2B(fmt.Sprintf("[%s] %s[%s]: %s%s\n",
+		timestamp, levelColor, strings.ToUpper(entry.Level.String()), entry.Message, colorReset)), nil
 }
 
 // ProtocolLogger from https://github.com/Mrs4s/go-cqhttp/blob/a5923f179b360331786a6509eb33481e775a7bd1/cmd/gocq/main.go#L501

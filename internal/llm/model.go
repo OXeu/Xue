@@ -8,6 +8,8 @@ import (
 	"github.com/goccy/go-yaml"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/sirupsen/logrus"
+	"strings"
 	"sync"
 )
 
@@ -30,7 +32,7 @@ var (
 
 func GetLLMManager() *Manager {
 	once.Do(func() {
-		configYaml, err := getConfigYaml()
+		configYaml, err := GetConfigYaml()
 		if err != nil {
 			panic(err)
 		}
@@ -58,9 +60,18 @@ func (m *Manager) Chat(ability uint8, prompt string, msg ...Msg) (*Response, err
 	for _, model := range m.Models {
 		if model.Ability&ability != 0 {
 			var msgUnions []openai.ChatCompletionMessageParamUnion
-			msgUnions = append(msgUnions, openai.SystemMessage(prompt))
+			if len(prompt) != 0 {
+				msgUnions = append(msgUnions, openai.SystemMessage(prompt))
+			}
 			for _, m := range msg {
 				msgUnions = append(msgUnions, m.ToLLM())
+			}
+			if log.Logger.Level >= logrus.DebugLevel {
+				marshal, err := json.Marshal(msgUnions)
+				if err != nil {
+					return nil, err
+				}
+				log.Logger.Debugln("[Chat] request chat:", string(marshal))
 			}
 			chatCompletion, err := model.Client.Chat.Completions.New(context.Background(), openai.ChatCompletionNewParams{
 				Messages: msgUnions,
@@ -76,6 +87,11 @@ func (m *Manager) Chat(ability uint8, prompt string, msg ...Msg) (*Response, err
 			if err != nil {
 				log.Logger.Errorln("[Chat] unmarshal Error:", err)
 				return nil, err
+			}
+			if len(respNew.ReasoningContent) == 0 && strings.Contains(respNew.Content, "<think>") {
+				r := strings.Split(respNew.Content, "</think>")
+				respNew.ReasoningContent = strings.TrimSpace(strings.TrimPrefix(r[0], "<think>"))
+				respNew.Content = strings.TrimSpace(r[1])
 			}
 			return &respNew, nil
 		}

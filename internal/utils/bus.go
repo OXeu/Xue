@@ -14,4 +14,5 @@ const (
 	LABEL_EMOJI   = "label_emoji"
 	LABELED_EMOJI = "labeled_emoji"
 	STOPPED       = "stopped"
+	RECV_EMOJI    = "receive_emoji"
 )

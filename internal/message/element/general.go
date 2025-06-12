@@ -13,7 +13,7 @@ type Message struct {
 	Id      uint      `gorm:"primaryKey" json:"id,omitempty"`
 	MsgId   uint32    `json:"msg_id,omitempty"` // 本地 id，查找时需要结合 UID / GID 搜索
 	UID     uint32    `json:"uid,omitempty"`
-	GID     uint32    `json:"gid,omitempty"`
+	GID     uint32    `json:"gid,omitempty"`      // 群 id，私聊为 0
 	ReplyTo uint32    `json:"reply_to,omitempty"` // 回复消息的本地 id
 	Time    uint32    `json:"time,omitempty"`
 	Content []Element `gorm:"serializer:json" json:"content,omitempty"`
@@ -54,10 +54,11 @@ func (i Image) ToLagrangeMessage() message.IMessageElement {
 }
 
 type CustomFaceElement struct {
-	Id    string `json:"id,omitempty"`
-	Alt   string `json:"alt,omitempty"`
+	gorm.Model
+	Id    string `gorm:"primaryKey" json:"id,omitempty"`
 	Label string `json:"label,omitempty"` // 通过 LLM 识别标注的表情特征（懒解析），在与模型交互时、闲时识别
 	Url   string `json:"url,omitempty"`
+	Md5   string `json:"md5"`
 }
 
 func (e CustomFaceElement) ToLagrangeMessage() message.IMessageElement {
@@ -66,7 +67,6 @@ func (e CustomFaceElement) ToLagrangeMessage() message.IMessageElement {
 		URL:     e.Url,
 		SubType: 1,
 		Flash:   false,
-		Summary: e.Alt,
 	}
 }
 

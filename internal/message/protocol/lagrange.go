@@ -1,6 +1,8 @@
 package protocol
 
 import (
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"github.com/LagrangeDev/LagrangeGo/client"
 	"github.com/LagrangeDev/LagrangeGo/client/auth"
@@ -71,11 +73,37 @@ func (l *Lagrange) Start() {
 
 	// 订阅群消息事件
 	l.QqClient.GroupMessageEvent.Subscribe(func(client *client.QQClient, event *message.GroupMessage) {
-		l.GroupMessage <- event
+		generalMsgContent, replyId := convertMessage(event.Elements)
+		jsonMsg, err := json.Marshal(generalMsgContent)
+		if err != nil {
+			log.Logger.Fatal("json marshal err: ", err)
+		}
+		log.Logger.Printf("Received group message(%d,%d,%d,%d) %s : %v", event.ID, event.InternalID, event.GroupUin, event.Time, event.Sender.UID, string(jsonMsg))
+		generalMsg := element.Message{
+			MsgId:   event.ID,
+			UID:     event.Sender.Uin,
+			GID:     event.GroupUin,
+			ReplyTo: replyId,
+			Content: generalMsgContent,
+		}
+		utils2.Bus.Publish(utils2.RECV_MSG, &generalMsg)
 	})
 
-	l.QqClient.PrivateMessageEvent.Subscribe(func(client *client.QQClient, event *message.PrivateMessage) {
-		l.PrivateMessage <- event
+	l.QqClient.PrivateMessageEvent.Subscribe(func(client *client.QQClient, msg *message.PrivateMessage) {
+		generalMsgContent, replyId := convertMessage(msg.Elements)
+		jsonMsg, err := json.Marshal(generalMsgContent)
+		if err != nil {
+			log.Logger.Fatal("json marshal err: ", err)
+		}
+		log.Logger.Printf("Received private message(%d,%d,%d) %s : %v", msg.ID, msg.InternalID, msg.Time, msg.Sender.UID, string(jsonMsg))
+		generalMsg := element.Message{
+			MsgId:   msg.ID,
+			UID:     msg.Sender.Uin,
+			GID:     0,
+			ReplyTo: replyId,
+			Content: generalMsgContent,
+		}
+		utils2.Bus.Publish(utils2.RECV_MSG, &generalMsg)
 	})
 
 	l.QqClient.DisconnectedEvent.Subscribe(func(client *client.QQClient, event *client.DisconnectedEvent) {
@@ -181,4 +209,66 @@ func (l *Lagrange) Start() {
 			return
 		}
 	}
+}
+
+func convertMessage(messages []message.IMessageElement) ([]element.Element, uint32) {
+	commonMsg := make([]element.Element, 0)
+	var replyId uint32
+	for _, ele := range messages {
+		msg, subReplyId := convertMessageElement(ele)
+		if subReplyId != 0 {
+			replyId = subReplyId
+		}
+		commonMsg = append(commonMsg, msg)
+	}
+	return commonMsg, replyId
+}
+
+func convertMessageElement(ele message.IMessageElement) (element.Element, uint32) {
+	switch ele.(type) {
+	case *message.TextElement:
+		text := ele.(*message.TextElement)
+		return element.Text(text.Content), 0
+	case *message.ReplyElement:
+		reply := ele.(*message.ReplyElement)
+		msg, _ := convertMessage(reply.Elements)
+		return element.ReplyMsg{Msg: msg, ReplyMsgId: reply.ReplySeq, Origin: reply}, reply.ReplySeq
+	case *message.AtElement:
+		at := ele.(*message.AtElement)
+		return element.AtMsg{Uin: at.TargetUin, Name: at.Display, Origin: at}, 0
+	case *message.ImageElement:
+		image := ele.(*message.ImageElement)
+		if image.SubType == 1 {
+			// 表情
+			face := element.CustomFaceElement{Url: image.URL, Id: image.ImageID, Md5: hex.EncodeToString(image.Md5)}
+			log.Logger.Info("[Lagrange]", "接收到表情", face.Id, face.Url, image.Summary)
+			utils2.Bus.Publish(utils2.RECV_EMOJI, &face)
+			return face, 0
+		} else {
+			// 图片
+			return element.Image{Id: image.ImageID, Alt: image.Summary, Url: image.URL}, 0
+		}
+	case *message.LightAppElement:
+		app := ele.(*message.LightAppElement)
+		log.Logger.Printf("light app element: %s", app.Content)
+		return nil, 0
+	case *message.XMLElement:
+		xml := ele.(*message.XMLElement)
+		log.Logger.Printf("xml element: %s", xml.Content)
+		return nil, 0
+	case *message.ForwardMessage:
+		forward := ele.(*message.ForwardMessage)
+		elements := make([][]element.Element, 0)
+		for _, node := range forward.Nodes {
+			data, _ := convertMessage(node.Message)
+			elements = append(elements, data)
+		}
+		return element.ForwardMsg{Elements: elements, Origin: forward}, 0
+	case *message.MarketFaceElement:
+		face := ele.(*message.MarketFaceElement)
+		return element.CustomFaceElement{Label: face.Summary, Url: ""}, 0
+	default:
+		log.Logger.Printf("unknown element type: %d", ele.Type())
+	}
+	return nil, 0
 }

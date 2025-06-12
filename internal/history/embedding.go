@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/OXeu/Xue/internal/llm"
 	"github.com/OXeu/Xue/internal/log"
 	"github.com/OXeu/Xue/internal/message/element"
 	"github.com/OXeu/Xue/internal/utils"
+	"github.com/goccy/go-yaml"
 	"github.com/philippgille/chromem-go"
 	"strconv"
 	"sync"
@@ -23,17 +25,29 @@ type Embedding struct {
 var embedding *Embedding
 var embeddingOnce sync.Once
 
-const (
-	baseUrl        = "https://ollama.xeu.sh/api"
-	embeddingModel = "smartcreation/bge-large-zh-v1.5:latest"
-)
-
 func GetEmbedding() *Embedding {
+	configYaml, err := llm.GetConfigYaml()
+	if err != nil {
+		panic(err)
+	}
+	var modelConfigs llm.Config
+	err = yaml.Unmarshal(configYaml, &modelConfigs)
+	if err != nil {
+		panic(err)
+	}
+	var model llm.OpenAIModel
+	for _, modelConfig := range modelConfigs.Models {
+		if modelConfig.Ability&llm.EMBEDDING != 0 {
+			model = modelConfig
+			break
+		}
+	}
+	log.Logger.Infoln("[Embedding] model:", model)
 	db, err := chromem.NewPersistentDB("data/chat-history.embedding.db", true)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to create DB: %v", err))
 	}
-	collection, _ := db.CreateCollection("chat-history", nil, chromem.NewEmbeddingFuncOllama(embeddingModel, baseUrl))
+	collection, _ := db.CreateCollection("chat-history", nil, chromem.NewEmbeddingFuncOpenAICompat(model.BaseUrl, model.Key, model.Model, nil))
 	embeddingOnce.Do(func() {
 		embedding = &Embedding{
 			Ctx:        context.Background(),
@@ -52,7 +66,7 @@ func (e *Embedding) Start() {
 	}
 }
 
-func (e Embedding) write(msg *element.Message) {
+func (e *Embedding) write(msg *element.Message) {
 	err := e.Collection.AddDocument(e.Ctx, chromem.Document{
 		ID:      strconv.Itoa(int(msg.ID)),
 		Content: msg.JsonContent(),
@@ -67,7 +81,7 @@ func (e Embedding) write(msg *element.Message) {
 	}
 }
 
-func (e Embedding) RecallMsg(msg *element.Message) ([]element.Message, error) {
+func (e *Embedding) RecallMsg(msg *element.Message) ([]element.Message, error) {
 	results, err := e.Collection.Query(e.Ctx, msg.JsonContent(), 10, nil, nil)
 	if err != nil {
 		log.Logger.Errorln("[Embedding] recall query err:", err)

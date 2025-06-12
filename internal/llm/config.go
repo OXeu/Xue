@@ -28,7 +28,7 @@ type Config struct {
 	Models []OpenAIModel `yaml:"models"`
 }
 
-func getConfigYaml() ([]byte, error) {
+func GetConfigYaml() ([]byte, error) {
 	openFunc := func(name string) []byte {
 		f, err := os.Open(name)
 		wd, err := os.Getwd()

@@ -2,8 +2,11 @@ package idle
 
 import (
 	"encoding/json"
+	"github.com/OXeu/Xue/internal/log"
 	"github.com/OXeu/Xue/internal/message/element"
 	"github.com/OXeu/Xue/internal/utils"
+	"os"
+	path2 "path"
 	"sync"
 	"time"
 )
@@ -20,7 +23,13 @@ var (
 
 func GetIdleHandler() *Handler {
 	once.Do(func() {
-		db := utils.New("emoji", "data/idle.queue.txt", 65535*100, 0, 65535, 2500, 2*time.Second, nil)
+		dir := path2.Join("data", "idle")
+		err := os.MkdirAll(dir, 0755)
+		if err != nil {
+			log.Logger.Errorf("创建 idle 数据目录失败: %v", err)
+			return
+		}
+		db := utils.New("emoji", dir, 65535*100, 0, 65535, 2500, 2*time.Second, nil)
 		instance = &Handler{
 			EmojiQueue: db,
 		}
@@ -40,7 +49,7 @@ func (h *Handler) Start() {
 		if err != nil {
 			continue
 		}
-		utils.Bus.Publish("label", emojiMsg.Id, image, "emoji")
+		utils.Bus.Publish(utils.LABEL_EMOJI, emojiMsg.Id, image, "emoji")
 	}
 }
 

@@ -4,7 +4,7 @@ import (
 	"github.com/OXeu/Xue/internal/llm"
 	"github.com/OXeu/Xue/internal/log"
 	"github.com/OXeu/Xue/internal/utils"
-	"go.uber.org/zap"
+	"strings"
 	"sync"
 )
 
@@ -30,7 +30,7 @@ func GetLabelHandler() *Handler {
 }
 
 func (h *Handler) Start() {
-	err := utils.Bus.Subscribe("label", handleLabelTask)
+	err := utils.Bus.Subscribe(utils.LABEL_EMOJI, handleLabelTask)
 	if err != nil {
 		log.Logger.Errorln("[label] subscribe label failed:", err)
 		return
@@ -38,9 +38,23 @@ func (h *Handler) Start() {
 }
 
 func handleLabelTask(id string, image []byte, type_ string) {
-	log.Info("label", "handle label task", zap.String("type", type_))
-	label := llm.GetLlmManager().DealThinkModel("", LabelTask{Image: image, Type: type_})
-	utils.Bus.Publish("labeled", id, label)
+	log.Logger.Info("[Label]", "handle label task: ", id, "type:", type_)
+	label, err := llm.GetLLMManager().Chat(llm.IMAGE, utils.LabelPrompt, llm.Msg{
+		Role:    llm.USER,
+		Content: utils.LabelUserPrompt,
+		Image:   image,
+	})
+	if err != nil {
+		log.Logger.Errorln("[Label]", "handle label task failed:", err)
+		return
+	}
+	labelText := label.Content
+	if strings.Contains(label.Content, "【") && strings.Contains(label.Content, "】") {
+		labelText = strings.Split(label.Content, "【")[1]
+		labelText = strings.Split(labelText, "】")[0]
+	}
+	log.Logger.Debugln("[Label]", "desc: ", label.Content, "label:", labelText)
+	utils.Bus.Publish(utils.LABELED_EMOJI, id, labelText)
 }
 
 // Wandering 处理器，结合闲时处理任务（相关时）为 bot 生成当前手头正在进行的工作

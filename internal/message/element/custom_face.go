@@ -7,9 +7,15 @@ import (
 	"os"
 )
 
-func (e *CustomFaceElement) Prefetch() error {
-	md5Name := utils.Md5String(e.Url)
-	path := "data/" + md5Name + ".png"
+func (e CustomFaceElement) Prefetch() error {
+	if len(e.Id) == 0 {
+		md5Name := utils.Md5String(e.Url)
+		e.Id = md5Name + ".jpg"
+	}
+	path, err := utils.Mkdirs("emojis", e.Id)
+	if err != nil {
+		return err
+	}
 	exists, err := utils.FileExists(path)
 	if err != nil {
 		return err
@@ -34,14 +40,16 @@ func (e *CustomFaceElement) Prefetch() error {
 	return nil
 }
 
-func (e *CustomFaceElement) GetImage() ([]byte, error) {
+func (e CustomFaceElement) GetImage() ([]byte, error) {
 	err := e.Prefetch()
 	if err != nil {
 		return nil, err
 	}
-	md5Name := utils.Md5String(e.Url)
-	path := "data/" + md5Name + "png"
-	file, err := os.Create(path)
+	path, err := utils.Mkdirs("emojis", e.Id)
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}

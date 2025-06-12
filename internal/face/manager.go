@@ -3,12 +3,17 @@ package face
 import (
 	"encoding/json"
 	"github.com/OXeu/Xue/internal/idle"
+	"github.com/OXeu/Xue/internal/log"
 	"github.com/OXeu/Xue/internal/message/element"
-	"strings"
+	"github.com/OXeu/Xue/internal/utils"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	path2 "path"
 	"sync"
 )
 
 type Manager struct {
+	Db *gorm.DB
 }
 
 var (
@@ -18,25 +23,85 @@ var (
 
 func GetFaceManager() *Manager {
 	once.Do(func() {
-		instance = &Manager{}
+		db, err := gorm.Open(sqlite.Open(path2.Join("data", "emojis.db")), &gorm.Config{})
+		if err != nil {
+			if err != nil {
+				log.Logger.Errorln("[FaceManager] failed to connect database:", err)
+			}
+		}
+		err = db.AutoMigrate(&element.CustomFaceElement{})
+		if err != nil {
+			log.Logger.Errorln("[FaceManager] failed to migrate:", err)
+		}
+		instance = &Manager{
+			Db: db,
+		}
 	})
 	return instance
 }
 
-func (m Manager) AddFace(msg element.CustomFaceElement) {
-	if len(msg.Alt) == 0 || strings.Contains(msg.Alt, "[动画表情]") {
-		if len(msg.Label) == 0 {
-			// 需要识别表情包之后再加入
-			bytes, err := json.Marshal(msg)
-			if err != nil {
-				return
-			}
-			err = idle.GetIdleHandler().EmojiQueue.Put(bytes)
-			if err != nil {
-				return
-			}
+func (m Manager) Start() {
+	log.Logger.Infoln("[FaceManager]", "start")
+	go func() {
+		err := utils.Bus.Subscribe(utils.RECV_EMOJI, m.ReceiveFace)
+		if err != nil {
+			log.Logger.Error("[FaceManager]", "subscribe RECV_EMOJI error", err)
 		}
-	} else {
-
+	}()
+	err := utils.Bus.Subscribe(utils.LABELED_EMOJI, m.SaveFace)
+	if err != nil {
+		log.Logger.Error("[FaceManager]", "subscribe LABELED_EMOJI error", err)
 	}
+}
+
+func (m Manager) ReceiveFace(msg *element.CustomFaceElement) {
+	log.Logger.Infoln("[FaceManager] received face: \"", msg.Label, "\", ", msg.Md5)
+	err := msg.Prefetch()
+	if !m.IsFaceExist(msg) {
+		m.Db.Create(&msg)
+	}
+	if err != nil {
+		log.Logger.Error("[FaceManager] save error: ", err)
+		return
+	}
+	if len(msg.Label) == 0 {
+		log.Logger.Infoln("[FaceManager] need to label: ", msg.Id)
+		// 需要识别表情包之后再加入
+		bytes, err := json.Marshal(msg)
+		if err != nil {
+			return
+		}
+		err = idle.GetIdleHandler().EmojiQueue.Put(bytes)
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (m Manager) SaveFace(id, label string) {
+	msg := m.GetFace(id)
+	msg.Label = label
+	m.Db.Where("id = ?", id).Update("label", label)
+	log.Logger.Infoln("[FaceManager]", "saved face label", msg.Label, " -> ", msg.Md5)
+}
+
+func (m Manager) GetFaces() []element.CustomFaceElement {
+	var faces []element.CustomFaceElement
+	m.Db.Where("label != ''").Find(&faces)
+	log.Logger.Infoln("[FaceManager]", "get faces", len(faces))
+	for _, face := range faces {
+		log.Logger.Infoln("[FaceManager]", "face", face.Label, face.Md5)
+	}
+	return faces
+}
+func (m Manager) GetFace(id string) element.CustomFaceElement {
+	var face element.CustomFaceElement
+	m.Db.Where("id = ?", id).Find(&face)
+	return face
+}
+
+func (m Manager) IsFaceExist(msg *element.CustomFaceElement) bool {
+	var dest element.CustomFaceElement
+	m.Db.First(&dest, "md5 = ?", msg.Md5)
+	return len(dest.Id) > 0
 }

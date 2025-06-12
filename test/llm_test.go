@@ -2,6 +2,9 @@ package test
 
 import (
 	"github.com/OXeu/Xue/internal/llm"
+	"github.com/OXeu/Xue/internal/utils"
+	"io"
+	"os"
 	"strings"
 	"testing"
 )
@@ -16,10 +19,36 @@ func TestLLMChat(t *testing.T) {
 	if err != nil {
 		t.Errorf("error: %v", err)
 	}
-	t.Logf("response: [%s], thinking: [%s]", response.Content, response.ReasoningContent)
+	t.Logf("response: [%s], \nthinking: [%s]", response.Content, response.ReasoningContent)
 	if !strings.Contains(response.Content, "Xue") {
 		t.Errorf("response does not contain Xue")
 	}
+}
+
+func TestLLMMultiModal(t *testing.T) {
+	path, err := utils.Mkdirs("emojis", "B82D49403584870F4267B4C96B504304.jpg")
+	if err != nil {
+		t.Errorf("mkdirs error: %v", err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Errorf("open error: %v", err)
+	}
+	bytes, err := io.ReadAll(file)
+	if err != nil {
+		t.Errorf("read error: %v", err)
+	}
+	response, err := llm.GetLLMManager().Chat(llm.IMAGE, utils.LabelPrompt, []llm.Msg{
+		{
+			Role:    "user",
+			Content: utils.LabelUserPrompt,
+			Image:   bytes,
+		},
+	}...)
+	if err != nil {
+		t.Errorf("error: %v", err)
+	}
+	t.Logf("response: [%s], \nthinking: [%s]", response.Content, response.ReasoningContent)
 }
 
 func TestLLMThink(t *testing.T) {
@@ -59,7 +88,7 @@ func TestLLMThinkMig(t *testing.T) {
 		},
 		{
 			Role:    llm.ASSIST,
-			Content: "思考：" + response.ReasoningContent,
+			Content: "<think>" + response.ReasoningContent + "</think>",
 		},
 	}...)
 	if err != nil {
