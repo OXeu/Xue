@@ -1,0 +1,7 @@
+services:
+  app:
+    container_name: Xue
+    build: .
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
