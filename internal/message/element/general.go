@@ -193,7 +193,7 @@ func (a AtMsg) ToLagrangeMessage() message.IMessageElement {
 }
 
 func (a AtMsg) ToReadableString() string {
-	return fmt.Sprintf("@{%s}", a.Name)
+	return fmt.Sprintf("%s", a.Name)
 }
 
 type CardMsg struct {
