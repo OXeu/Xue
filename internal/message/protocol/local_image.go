@@ -13,6 +13,10 @@ type LocalImage struct {
 	SubType int32
 }
 
+func (l LocalImage) ToReadableString() string {
+	return "[动画表情]"
+}
+
 func (l LocalImage) ToLagrangeMessage() message.IMessageElement {
 	reader := bytes.NewReader(l.Data)
 	image := message.ImageElement{

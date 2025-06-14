@@ -68,11 +68,12 @@ func (m *Manager) Chat(ability uint8, prompt string, msg ...Msg) (*Response, err
 				msgUnions = append(msgUnions, m.ToLLM())
 			}
 			if log.Logger.Level >= logrus.DebugLevel {
-				marshal, err := json.Marshal(msgUnions)
-				if err != nil {
-					return nil, err
+				var debugString string
+				debugString += prompt + "\n"
+				for _, m := range msg {
+					debugString += m.ReadableContent() + "\n"
 				}
-				log.Logger.Debugln("[Chat] request chat:", string(marshal))
+				log.Logger.Debugln("[Chat] request chat:", debugString)
 			}
 			chatCompletion, err := model.Client.Chat.Completions.New(context.Background(), openai.ChatCompletionNewParams{
 				Messages: msgUnions,

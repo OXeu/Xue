@@ -7,6 +7,7 @@ import (
 	"github.com/LagrangeDev/LagrangeGo/client"
 	"github.com/LagrangeDev/LagrangeGo/client/auth"
 	"github.com/LagrangeDev/LagrangeGo/message"
+	face2 "github.com/OXeu/Xue/internal/face"
 	"github.com/OXeu/Xue/internal/log"
 	"github.com/OXeu/Xue/internal/message/element"
 	utils2 "github.com/OXeu/Xue/internal/utils"
@@ -79,12 +80,18 @@ func (l *Lagrange) Start() {
 			log.Logger.Fatal("json marshal err: ", err)
 		}
 		log.Logger.Printf("Received group message(%d,%d,%d,%d) %s : %v", event.ID, event.InternalID, event.GroupUin, event.Time, event.Sender.UID, string(jsonMsg))
+		var content string
+		for _, ele := range generalMsgContent {
+			content += ele.ToReadableString() + "\n"
+		}
 		generalMsg := element.Message{
-			MsgId:   event.ID,
-			UID:     event.Sender.Uin,
-			GID:     event.GroupUin,
-			ReplyTo: replyId,
-			Content: generalMsgContent,
+			MsgId:    event.ID,
+			UID:      event.Sender.Uin,
+			NickName: event.Sender.Nickname,
+			GID:      event.GroupUin,
+			ReplyTo:  replyId,
+			Content:  content,
+			Time:     event.Time,
 		}
 		utils2.Bus.Publish(utils2.ReceiveMsg, &generalMsg)
 	})
@@ -96,12 +103,18 @@ func (l *Lagrange) Start() {
 			log.Logger.Fatal("json marshal err: ", err)
 		}
 		log.Logger.Printf("Received private message(%d,%d,%d) %s : %v", msg.ID, msg.InternalID, msg.Time, msg.Sender.UID, string(jsonMsg))
+		var content string
+		for _, ele := range generalMsgContent {
+			content += ele.ToReadableString() + "\n"
+		}
 		generalMsg := element.Message{
-			MsgId:   msg.ID,
-			UID:     msg.Sender.Uin,
-			GID:     0,
-			ReplyTo: replyId,
-			Content: generalMsgContent,
+			MsgId:    msg.ID,
+			UID:      msg.Sender.Uin,
+			NickName: msg.Sender.Nickname,
+			GID:      0,
+			ReplyTo:  replyId,
+			Time:     msg.Time,
+			Content:  content,
 		}
 		utils2.Bus.Publish(utils2.ReceiveMsg, &generalMsg)
 	})
@@ -240,8 +253,12 @@ func convertMessageElement(ele message.IMessageElement) (element.Element, uint32
 		image := ele.(*message.ImageElement)
 		if image.SubType == 1 {
 			// 表情
+			f := face2.GetFaceManager().GetFace(image.ImageID)
 			face := element.CustomFaceElement{Url: image.URL, Id: image.ImageID, Md5: hex.EncodeToString(image.Md5)}
-			log.Logger.Info("[Lagrange]", "接收到表情", face.Id, face.Url, image.Summary)
+			if len(f.Label) != 0 {
+				face.Label = f.Label
+			}
+			log.Logger.Infof("[Lagrange] 接收到表情[%s]: %s, %s, %s", face.Label, face.Id, face.Url, image.Summary)
 			utils2.Bus.Publish(utils2.ReceiveEmoji, &face)
 			return face, 0
 		} else {

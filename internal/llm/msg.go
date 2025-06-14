@@ -1,6 +1,9 @@
 package llm
 
-import "github.com/openai/openai-go"
+import (
+	"fmt"
+	"github.com/openai/openai-go"
+)
 
 const (
 	USER   = "user"
@@ -12,6 +15,14 @@ type Msg struct {
 	Role    string
 	Content string
 	Image   []byte
+}
+
+func (m *Msg) ReadableContent() string {
+	if len(m.Image) == 0 {
+		return fmt.Sprintf("%s:%s", m.Role, m.Content)
+	} else {
+		return fmt.Sprintf("%s:%s [size: %d]", m.Role, m.Content, len(m.Image))
+	}
 }
 
 type Response struct {

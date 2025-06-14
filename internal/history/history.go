@@ -50,6 +50,7 @@ func (h *History) Start() {
 
 func (h *History) write(message *element.Message) {
 	h.Db.Create(message)
+	log.Logger.Infoln("[history] write message:", message.ReadableContent())
 }
 
 // RecallHistory 召回历史消息（包含最新消息的回复链）
@@ -63,9 +64,9 @@ func (h *History) RecallHistory(id uint32, isPrivate bool, replyId uint32) []ele
 func (h *History) ReadLatest(id uint32, isPrivate bool) []element.Message {
 	var historyItems []element.Message
 	if isPrivate {
-		h.Db.Where("uid = ?", id).Find(&historyItems).Limit(Limit)
+		h.Db.Where("uid = ?", id).Limit(Limit).Find(&historyItems)
 	} else {
-		h.Db.Where("gid = ?", id).Find(&historyItems).Limit(Limit)
+		h.Db.Where("gid = ?", id).Limit(Limit).Find(&historyItems)
 	}
 	return historyItems
 }
@@ -95,6 +96,23 @@ func (h *History) ReadReplyChian(id uint32, isPrivate bool, replyId uint32) []el
 		}
 	}
 	return historyItems
+}
+
+func (h *History) RecallReply(id uint32, isPrivate bool, replyId uint32) *element.Message {
+	msgId := replyId
+	if msgId == 0 {
+		return nil
+	}
+	var historyItem element.Message
+	if isPrivate {
+		h.Db.Where(&element.Message{MsgId: msgId, UID: id}).First(&historyItem)
+	} else {
+		h.Db.Where(&element.Message{MsgId: msgId, GID: id}).First(&historyItem)
+	}
+	if historyItem.MsgId == msgId {
+		return &historyItem
+	}
+	return nil
 }
 
 func MergeMessages(messages ...[]element.Message) []element.Message {

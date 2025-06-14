@@ -39,21 +39,20 @@ func (r *Reactor) Start() {
 // 响应消息（即时）
 func (r *Reactor) reactMessage(msg *element.Message) {
 	// 获取当前计划
-	log.Logger.Infof("[Reactor] react message")
 	internal := GetInternal()
 	plan := internal.Current
 	if plan != nil {
 		rate := rand.Float32()
 		if rate < plan.GetResponseRate() {
 			// response
-			log.Logger.Infoln("[Reactor] response")
+			log.Logger.Infoln("[Reactor] try reply message")
 			utils.Bus.Publish(utils.ReplyMsg, msg)
 		} else {
 			log.Logger.Infof("[Reactor] %f > %f, skip response", rate, plan.GetResponseRate())
 		}
 	} else {
-		log.Logger.Infoln("[Reactor] plan not ready")
-		return
+		log.Logger.Infoln("[Reactor] try reply message")
+		utils.Bus.Publish(utils.ReplyMsg, msg)
 	}
 }
 

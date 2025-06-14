@@ -24,7 +24,7 @@ const (
 var Logger = logrus.New()
 
 func init() {
-	Logger.SetLevel(logrus.InfoLevel)
+	Logger.SetLevel(logrus.DebugLevel)
 	Logger.SetFormatter(&ColoredFormatter{})
 	Logger.SetOutput(colorable.NewColorableStdout())
 }

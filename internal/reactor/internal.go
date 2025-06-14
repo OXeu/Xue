@@ -148,9 +148,9 @@ func getType(s string) int32 {
 func (p *Plan) GetResponseRate() float32 {
 	switch p.Type {
 	case Outdoor:
-		return 0.5
-	case Indoor:
 		return 0.8
+	case Indoor:
+		return 0.9
 	case Sleep:
 		return 0.2
 	default:

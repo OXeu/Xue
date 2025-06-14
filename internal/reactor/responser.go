@@ -2,12 +2,14 @@ package reactor
 
 import (
 	"github.com/OXeu/Xue/internal/face"
+	"github.com/OXeu/Xue/internal/history"
 	"github.com/OXeu/Xue/internal/llm"
 	"github.com/OXeu/Xue/internal/log"
 	"github.com/OXeu/Xue/internal/message/element"
 	"github.com/OXeu/Xue/internal/utils"
 	"math/rand"
 	"strings"
+	"time"
 )
 
 // 响应具体的消息
@@ -37,21 +39,33 @@ func (r *Responser) Start() {
 }
 
 func (r *Responser) ReplyMsg(msg *element.Message) {
-	chat, err := llm.GetLLMManager().Chat(llm.THINK, utils.ReplyPrompt, llm.Msg{
+	prompt := strings.ReplaceAll(utils.ReplyPrompt, "${time}", time.Now().Format("2006-01-02 15:04:05"))
+	var historyMsg []llm.Msg
+	id := msg.GID
+	if id == 0 {
+		id = msg.UID
+	}
+	historyMsgPack := history.GetHistory().RecallHistory(id, msg.GID == 0, msg.ReplyTo)
+	for _, h := range historyMsgPack {
+		historyMsg = append(historyMsg, llm.Msg{
+			Role:    llm.USER,
+			Content: h.ReadableContent(),
+		})
+	}
+	historyMsg = append(historyMsg, llm.Msg{
 		Role:    llm.USER,
-		Content: msg.JsonContent(),
+		Content: msg.ReadableContent(),
 	})
+	chat, err := llm.GetLLMManager().Chat(llm.THINK, prompt, historyMsg...)
 	if err != nil {
 		log.Logger.Errorf("[Responser] think error: %v", err)
 		return
 	}
-	chatNext, err := llm.GetLLMManager().Chat(llm.CHAT, utils.ReplyPrompt, llm.Msg{
-		Role:    llm.USER,
-		Content: msg.JsonContent(),
-	}, llm.Msg{
+	historyMsg = append(historyMsg, llm.Msg{
 		Role:    llm.ASSIST,
 		Content: "<think>" + chat.ReasoningContent + "</think>",
 	})
+	chatNext, err := llm.GetLLMManager().Chat(llm.CHAT, prompt, historyMsg...)
 	if err != nil {
 		log.Logger.Errorf("[Responser] chat error: %v", err)
 		return
@@ -79,7 +93,8 @@ func (r *Responser) PostHandleMsg(msg *element.Message, replyMsg string) {
 func (r *Responser) EmojiSender(msg *element.Message, replyMsg string) {
 	// 获取表情包
 	rate := rand.Float32()
-	if rate < 0.5 {
+	if rate < 0.9 {
+		log.Logger.Infoln("[Responser] start emoji sender")
 		faces := face.GetFaceManager().GetFaces()
 		if len(faces) > 0 {
 			emojis := ""
@@ -88,36 +103,53 @@ func (r *Responser) EmojiSender(msg *element.Message, replyMsg string) {
 			}
 
 			prompt := strings.ReplaceAll(utils.EmojiSenderPrompt, "${emojis}", emojis)
-			chat, err := llm.GetLLMManager().Chat(llm.CHAT, prompt, llm.Msg{
+			var historyMsg []llm.Msg
+			historyMsgPack := history.GetHistory().RecallHistory(msg.MsgId, msg.GID == 0, msg.ReplyTo)
+			for _, h := range historyMsgPack {
+				historyMsg = append(historyMsg, llm.Msg{
+					Role:    llm.USER,
+					Content: h.ReadableContent(),
+				})
+			}
+			historyMsg = append(historyMsg, llm.Msg{
 				Role:    llm.USER,
-				Content: msg.JsonContent(),
-			}, llm.Msg{
+				Content: msg.ReadableContent(),
+			})
+			historyMsg = append(historyMsg, llm.Msg{
 				Role:    llm.ASSIST,
 				Content: replyMsg,
 			})
+			chat, err := llm.GetLLMManager().Chat(llm.CHAT, prompt, historyMsg...)
 			if err != nil {
 				log.Logger.Errorf("[Responser] emoji send chat error: %v", err)
 				return
 			}
 			if chat.Content != "" {
 				emojiName := utils.SubString(chat.Content, "【", "】")
+				if len(emojiName) == 0 {
+					log.Logger.Infof("[Responser] emoji name is empty: [%s]", emojiName)
+				}
 				var f element.CustomFaceElement
-				for _, face := range faces {
-					if face.Label == emojiName {
-						f = face
+				for _, ff := range faces {
+					if strings.Contains(ff.Label, emojiName) {
+						f = ff
 						break
 					}
 				}
-				if f.ID == 0 {
-					log.Logger.Infoln("[Responser] emoji not found:", emojiName)
+				if len(f.Id) == 0 {
+					log.Logger.Infof("[Responser] emoji not found: [%s]", emojiName)
 					return
 				}
-				utils.Bus.Publish(utils.SendMsg, msg, &element.SendMessage{
+				utils.Bus.Publish(utils.SendMsg, &element.SendMessage{
 					Element:   &[]element.Element{f},
 					IsPrivate: msg.GID == 0,
 					Uin:       msg.UID,
 				})
 			}
+		} else {
+			log.Logger.Infoln("[Emoji Sender] no emoji found")
 		}
+	} else {
+		log.Logger.Infof("[Emoji Sender] %f < %f, skip emoji", rate, 0.5)
 	}
 }

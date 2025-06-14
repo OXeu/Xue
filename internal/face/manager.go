@@ -81,7 +81,7 @@ func (m Manager) ReceiveFace(msg *element.CustomFaceElement) {
 func (m Manager) SaveFace(id, label string) {
 	msg := m.GetFace(id)
 	msg.Label = label
-	m.Db.Where("id = ?", id).Update("label", label)
+	m.Db.Model(&element.CustomFaceElement{}).Where("id = ?", id).Update("label", label)
 	log.Logger.Infoln("[FaceManager]", "saved face label", msg.Label, " -> ", msg.Md5)
 }
 
@@ -90,7 +90,7 @@ func (m Manager) GetFaces() []element.CustomFaceElement {
 	m.Db.Where("label != ''").Find(&faces)
 	log.Logger.Infoln("[FaceManager]", "get faces", len(faces))
 	for _, face := range faces {
-		log.Logger.Infoln("[FaceManager]", "face", face.Label, face.Md5)
+		log.Logger.Infoln("[FaceManager]", "face", face.Label, face.Id)
 	}
 	return faces
 }
