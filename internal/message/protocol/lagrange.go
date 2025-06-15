@@ -58,7 +58,7 @@ func (l *Lagrange) Start() {
 	l.QqClient.UseDevice(&deviceInfo)
 
 	// 从保存的sig.bin文件读取登录信息
-	exist, _ := utils2.FileExists("data/sig.bin")
+	exist, err := utils2.FileExists("data/sig.bin")
 	if exist {
 		data, err := os.ReadFile("data/sig.bin")
 		if err != nil {
@@ -200,7 +200,7 @@ func (l *Lagrange) Start() {
 	defer l.QqClient.Release()
 	defer func() {
 		// 序列化登录信息以便下次使用
-		data, err = l.QqClient.Sig().Marshal()
+		data, err := l.QqClient.Sig().Marshal()
 		if err != nil {
 			log.Logger.Errorln("序列化签名错误:", err)
 			return
