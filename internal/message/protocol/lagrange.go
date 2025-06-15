@@ -58,17 +58,20 @@ func (l *Lagrange) Start() {
 	l.QqClient.UseDevice(&deviceInfo)
 
 	// 从保存的sig.bin文件读取登录信息
-	data, err := os.ReadFile("data/sig.bin")
-	if err != nil {
-		logrus.Warnln("读取签名错误:", err)
-	} else {
-		// 将登录信息反序列化
-		sig, err := auth.UnmarshalSigInfo(data, true)
+	exist, _ := utils2.FileExists("data/sig.bin")
+	if exist {
+		data, err := os.ReadFile("data/sig.bin")
 		if err != nil {
-			logrus.Warnln("反序列化签名错误:", err)
+			logrus.Warnln("读取签名错误:", err)
 		} else {
-			// 如果登录信息有效，则使用登录信息登录
-			l.QqClient.UseSig(sig)
+			// 将登录信息反序列化
+			sig, err := auth.UnmarshalSigInfo(data, true)
+			if err != nil {
+				logrus.Warnln("反序列化签名错误:", err)
+			} else {
+				// 如果登录信息有效，则使用登录信息登录
+				l.QqClient.UseSig(sig)
+			}
 		}
 	}
 
