@@ -19,9 +19,9 @@ type Msg struct {
 
 func (m *Msg) ReadableContent() string {
 	if len(m.Image) == 0 {
-		return fmt.Sprintf("%s:%s", m.Role, m.Content)
+		return fmt.Sprintf("-----------\n%s:%s\n^^^^^^^^^^^^", m.Role, m.Content)
 	} else {
-		return fmt.Sprintf("%s:%s [size: %d]", m.Role, m.Content, len(m.Image))
+		return fmt.Sprintf("------------\n%s:%s [size: %d]\n^^^^^^^^^^^^", m.Role, m.Content, len(m.Image))
 	}
 }
 

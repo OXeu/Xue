@@ -16,14 +16,15 @@ type Type = int
 
 type Message struct {
 	gorm.Model
-	Id       uint   `gorm:"primaryKey" json:"id,omitempty"`
-	MsgId    uint32 `json:"msg_id,omitempty"` // 本地 id，查找时需要结合 UID / GID 搜索
-	UID      uint32 `json:"uid,omitempty"`
-	NickName string `json:"nick_name,omitempty"`
-	GID      uint32 `json:"gid,omitempty"`      // 群 id，私聊为 0
-	ReplyTo  uint32 `json:"reply_to,omitempty"` // 回复消息的本地 id
-	Time     uint32 `json:"time,omitempty"`
-	Content  string `json:"content,omitempty"`
+	Id        uint   `gorm:"primaryKey" json:"id,omitempty"`
+	MsgId     uint32 `json:"msg_id,omitempty"` // 本地 id，查找时需要结合 UID / SessionId 搜索
+	UID       uint32 `json:"uid,omitempty"`
+	NickName  string `json:"nick_name,omitempty"`
+	SessionId uint32 `json:"session_id,omitempty"` // 群 id / 私聊 id
+	IsPrivate bool   `json:"is_private"`
+	ReplyTo   uint32 `json:"reply_to,omitempty"` // 回复消息的本地 id
+	Time      uint32 `json:"time,omitempty"`
+	Content   string `json:"content,omitempty"`
 }
 
 func (m Message) JsonContent() string {
@@ -36,10 +37,6 @@ func (m Message) JsonContent() string {
 
 func (m Message) ReadableContent() string {
 	t := time.Unix(int64(m.Time), 0)
-	id := m.GID
-	if id == 0 {
-		id = m.UID
-	}
 	return fmt.Sprintf("%s\n%s:%s", t.Format("2006-01-02 15:04:05"), m.NickName, m.Content)
 }
 
@@ -179,7 +176,7 @@ func (r ReplyMsg) ToReadableString() string {
 	for _, element := range r.Msg {
 		content += element.ToReadableString()
 	}
-	return fmt.Sprintf("[回复]{%s}", content)
+	return fmt.Sprintf("> %s", content)
 }
 
 type AtMsg struct {
@@ -203,7 +200,7 @@ type CardMsg struct {
 }
 
 type SendMessage struct {
-	Uin       uint32     `json:"uin,omitempty"`
+	TargetId  uint32     `json:"target_id,omitempty"`
 	IsPrivate bool       `json:"is_private,omitempty"`
 	Element   *[]Element `json:"element,omitempty"`
 }

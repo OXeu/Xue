@@ -71,9 +71,9 @@ func (e *Embedding) write(msg *element.Message) {
 		ID:      strconv.Itoa(int(msg.ID)),
 		Content: msg.JsonContent(),
 		Metadata: map[string]string{
-			"msg_id": strconv.Itoa(int(msg.MsgId)),
-			"gid":    strconv.Itoa(int(msg.GID)),
-			"uid":    strconv.Itoa(int(msg.UID)),
+			"msg_id":     strconv.Itoa(int(msg.MsgId)),
+			"session_id": strconv.Itoa(int(msg.SessionId)),
+			"uid":        strconv.Itoa(int(msg.UID)),
 		},
 	})
 	if err != nil {

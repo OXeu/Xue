@@ -3,10 +3,12 @@ package history
 import (
 	"github.com/OXeu/Xue/internal/log"
 	"github.com/OXeu/Xue/internal/message/element"
+	"github.com/OXeu/Xue/internal/message/protocol"
 	"github.com/OXeu/Xue/internal/utils"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"sync"
+	"time"
 )
 
 const Limit = 10
@@ -41,11 +43,36 @@ func GetHistory() *History {
 }
 
 func (h *History) Start() {
-	err := utils.Bus.Subscribe(utils.ReceiveMsg, h.write)
-	if err != nil {
-		log.Logger.Errorln("[history] subscribe recv msg error:", err)
-		return
+	go func() {
+		err := utils.Bus.Subscribe(utils.ReceiveMsg, h.write)
+		if err != nil {
+			log.Logger.Errorln("[history] subscribe recv msg error:", err)
+			return
+		}
+	}()
+	go func() {
+		err := utils.Bus.Subscribe(utils.SendMsg, h.writeSendMessage)
+		if err != nil {
+			log.Logger.Errorln("[history] subscribe recv msg error:", err)
+			return
+		}
+	}()
+}
+
+func (h *History) writeSendMessage(message *element.SendMessage) {
+	var content string
+	for _, ele := range *message.Element {
+		content += ele.ToReadableString() + ";"
 	}
+	uin := protocol.GetLagrange().QqClient.Uin
+	msg := element.Message{
+		UID:       uin,
+		SessionId: message.TargetId,
+		IsPrivate: message.IsPrivate,
+		Content:   content,
+		Time:      uint32(time.Now().Unix()),
+	}
+	h.write(&msg)
 }
 
 func (h *History) write(message *element.Message) {
@@ -54,24 +81,20 @@ func (h *History) write(message *element.Message) {
 }
 
 // RecallHistory 召回历史消息（包含最新消息的回复链）
-func (h *History) RecallHistory(id uint32, isPrivate bool, replyId uint32) []element.Message {
+func (h *History) RecallHistory(sessionId uint32, isPrivate bool, replyId uint32) []element.Message {
 	if replyId == 0 {
-		return h.ReadLatest(id, isPrivate)
+		return h.ReadLatest(sessionId, isPrivate)
 	}
-	return MergeMessages(h.ReadLatest(id, isPrivate), h.ReadReplyChian(id, isPrivate, replyId))
+	return MergeMessages(h.ReadLatest(sessionId, isPrivate), h.ReadReplyChian(sessionId, isPrivate, replyId))
 }
 
-func (h *History) ReadLatest(id uint32, isPrivate bool) []element.Message {
+func (h *History) ReadLatest(sessionId uint32, isPrivate bool) []element.Message {
 	var historyItems []element.Message
-	if isPrivate {
-		h.Db.Where("uid = ?", id).Limit(Limit).Find(&historyItems)
-	} else {
-		h.Db.Where("gid = ?", id).Limit(Limit).Find(&historyItems)
-	}
+	h.Db.Where(&element.Message{SessionId: sessionId, IsPrivate: isPrivate}).Limit(Limit).Find(&historyItems)
 	return historyItems
 }
 
-func (h *History) ReadReplyChian(id uint32, isPrivate bool, replyId uint32) []element.Message {
+func (h *History) ReadReplyChian(targetId uint32, isPrivate bool, replyId uint32) []element.Message {
 	var historyItems []element.Message
 	msgId := replyId
 	for {
@@ -79,11 +102,7 @@ func (h *History) ReadReplyChian(id uint32, isPrivate bool, replyId uint32) []el
 			break
 		}
 		var historyItem element.Message
-		if isPrivate {
-			h.Db.Where(&element.Message{MsgId: msgId, UID: id}).First(&historyItem)
-		} else {
-			h.Db.Where(&element.Message{MsgId: msgId, GID: id}).First(&historyItem)
-		}
+		h.Db.Where(&element.Message{MsgId: msgId, SessionId: targetId, IsPrivate: isPrivate}).First(&historyItem)
 		if historyItem.MsgId == msgId {
 			historyItems = append(historyItems, historyItem)
 			if historyItem.ReplyTo != 0 {
@@ -98,17 +117,13 @@ func (h *History) ReadReplyChian(id uint32, isPrivate bool, replyId uint32) []el
 	return historyItems
 }
 
-func (h *History) RecallReply(id uint32, isPrivate bool, replyId uint32) *element.Message {
+func (h *History) RecallReply(targetId uint32, isPrivate bool, replyId uint32) *element.Message {
 	msgId := replyId
 	if msgId == 0 {
 		return nil
 	}
 	var historyItem element.Message
-	if isPrivate {
-		h.Db.Where(&element.Message{MsgId: msgId, UID: id}).First(&historyItem)
-	} else {
-		h.Db.Where(&element.Message{MsgId: msgId, GID: id}).First(&historyItem)
-	}
+	h.Db.Where(&element.Message{MsgId: msgId, SessionId: targetId, IsPrivate: isPrivate}).First(&historyItem)
 	if historyItem.MsgId == msgId {
 		return &historyItem
 	}

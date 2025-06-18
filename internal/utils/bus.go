@@ -7,7 +7,7 @@ import (
 var Bus = eventbus.New()
 
 const (
-	STARTED      = "started"
+	Started      = "started"
 	ReceiveMsg   = "receive_message"
 	PreSendMsg   = "pre_send_message"
 	SendMsg      = "send_message"
@@ -15,7 +15,7 @@ const (
 	ReplyMsg     = "reply_message"
 	LabelEmoji   = "label_emoji"
 	LabeledEmoji = "labeled_emoji"
-	STOPPED      = "stopped"
+	Stopped      = "stopped"
 	ReceiveEmoji = "receive_emoji"
 	PlanChanged  = "plan_changed"
 )

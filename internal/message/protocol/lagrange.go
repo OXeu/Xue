@@ -88,13 +88,14 @@ func (l *Lagrange) Start() {
 			content += ele.ToReadableString() + "\n"
 		}
 		generalMsg := element.Message{
-			MsgId:    event.ID,
-			UID:      event.Sender.Uin,
-			NickName: event.Sender.Nickname,
-			GID:      event.GroupUin,
-			ReplyTo:  replyId,
-			Content:  content,
-			Time:     event.Time,
+			MsgId:     event.ID,
+			UID:       event.Sender.Uin,
+			NickName:  event.Sender.Nickname,
+			SessionId: event.GroupUin,
+			IsPrivate: false,
+			ReplyTo:   replyId,
+			Content:   content,
+			Time:      event.Time,
 		}
 		utils2.Bus.Publish(utils2.ReceiveMsg, &generalMsg)
 	})
@@ -111,13 +112,14 @@ func (l *Lagrange) Start() {
 			content += ele.ToReadableString() + "\n"
 		}
 		generalMsg := element.Message{
-			MsgId:    msg.ID,
-			UID:      msg.Sender.Uin,
-			NickName: msg.Sender.Nickname,
-			GID:      0,
-			ReplyTo:  replyId,
-			Time:     msg.Time,
-			Content:  content,
+			MsgId:     msg.ID,
+			UID:       msg.Sender.Uin,
+			NickName:  msg.Sender.Nickname,
+			SessionId: msg.Sender.Uin,
+			IsPrivate: true,
+			ReplyTo:   replyId,
+			Time:      msg.Time,
+			Content:   content,
 		}
 		utils2.Bus.Publish(utils2.ReceiveMsg, &generalMsg)
 	})
@@ -177,15 +179,20 @@ func (l *Lagrange) Start() {
 
 	go func() {
 		err := utils2.Bus.Subscribe(utils2.SendMsg, func(msg *element.SendMessage) {
+			var debugMsg string
+			for _, ele := range *msg.Element {
+				debugMsg += ele.ToReadableString() + ";"
+			}
+			log.Logger.Infof("发送消息: %d(%v) -> %s", msg.TargetId, msg.IsPrivate, debugMsg)
 			// 处理发送消息的逻辑
 			if msg.IsPrivate {
-				_, err = l.QqClient.SendPrivateMessage(msg.Uin, msg.ToLagrangeMessage())
+				_, err = l.QqClient.SendPrivateMessage(msg.TargetId, msg.ToLagrangeMessage())
 				if err != nil {
 					log.Logger.Errorf("发送单聊消息失败: %v", err)
 				}
 				utils2.Bus.Publish(utils2.SentMsg, msg)
 			} else {
-				_, err = l.QqClient.SendGroupMessage(msg.Uin, msg.ToLagrangeMessage())
+				_, err = l.QqClient.SendGroupMessage(msg.TargetId, msg.ToLagrangeMessage())
 				if err != nil {
 					log.Logger.Errorf("发送群聊消息失败: %v", err)
 				}
@@ -213,10 +220,10 @@ func (l *Lagrange) Start() {
 		log.Logger.Infoln("签名已保存至 sig.bin")
 	}()
 
-	utils2.Bus.Publish(utils2.STARTED)
+	utils2.Bus.Publish(utils2.Started)
 	mc := make(chan os.Signal, 2)
 	signal.Notify(mc, os.Interrupt, syscall.SIGTERM)
-	_ = utils2.Bus.Subscribe(utils2.STOPPED, func() {
+	_ = utils2.Bus.Subscribe(utils2.Stopped, func() {
 		mc <- os.Interrupt
 	})
 	for {

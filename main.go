@@ -7,6 +7,7 @@ import (
 	"github.com/OXeu/Xue/internal/label"
 	"github.com/OXeu/Xue/internal/message/protocol"
 	"github.com/OXeu/Xue/internal/reactor"
+	"github.com/OXeu/Xue/internal/utils"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,6 +15,10 @@ import (
 )
 
 func main() {
+	_, err := utils.Mkdirs("data")
+	if err != nil {
+		panic(err)
+	}
 	go protocol.GetLagrange().Start()
 	go face.GetFaceManager().Start()
 	go history.GetEmbedding().Start()

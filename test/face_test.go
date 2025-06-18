@@ -24,12 +24,12 @@ func TestFace(t *testing.T) {
 
 func TestFaceSend(t *testing.T) {
 	go protocol.GetLagrange().Start()
-	utils.Bus.Subscribe(utils.STARTED, func() {
+	utils.Bus.Subscribe(utils.Started, func() {
 		faces := face.GetFaceManager().GetFaces()
 		if len(faces) > 1 {
 			f := faces[0]
 			utils.Bus.Publish(utils.SendMsg, &element.SendMessage{
-				Uin:       1573856599,
+				TargetId:  1573856599,
 				Element:   &[]element.Element{f},
 				IsPrivate: true,
 			})

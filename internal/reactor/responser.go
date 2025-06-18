@@ -9,12 +9,14 @@ import (
 	"github.com/OXeu/Xue/internal/utils"
 	"math/rand"
 	"strings"
+	"sync"
 	"time"
 )
 
 // 响应具体的消息
 
 type Responser struct {
+	isResponding sync.Mutex
 }
 
 func GetResponser() *Responser {
@@ -39,13 +41,15 @@ func (r *Responser) Start() {
 }
 
 func (r *Responser) ReplyMsg(msg *element.Message) {
+	if r.isResponding.TryLock() == false {
+		log.Logger.Infoln("[Reactor] is responding, skip")
+		return
+	}
+	defer r.isResponding.Unlock()
+	thinkPrompt := strings.ReplaceAll(utils.ReplyThinkPrompt, "${time}", time.Now().Format("2006-01-02 15:04:05"))
 	prompt := strings.ReplaceAll(utils.ReplyPrompt, "${time}", time.Now().Format("2006-01-02 15:04:05"))
 	var historyMsg []llm.Msg
-	id := msg.GID
-	if id == 0 {
-		id = msg.UID
-	}
-	historyMsgPack := history.GetHistory().RecallHistory(id, msg.GID == 0, msg.ReplyTo)
+	historyMsgPack := history.GetHistory().RecallHistory(msg.SessionId, msg.IsPrivate, msg.ReplyTo)
 	for _, h := range historyMsgPack {
 		historyMsg = append(historyMsg, llm.Msg{
 			Role:    llm.USER,
@@ -56,7 +60,7 @@ func (r *Responser) ReplyMsg(msg *element.Message) {
 		Role:    llm.USER,
 		Content: msg.ReadableContent(),
 	})
-	chat, err := llm.GetLLMManager().Chat(llm.THINK, prompt, historyMsg...)
+	chat, err := llm.GetLLMManager().Chat(llm.THINK, thinkPrompt, historyMsg...)
 	if err != nil {
 		log.Logger.Errorf("[Responser] think error: %v", err)
 		return
@@ -84,9 +88,11 @@ func (r *Responser) PostHandleMsg(msg *element.Message, replyMsg string) {
 			Element: &[]element.Element{
 				element.Text(replyMsg),
 			},
-			IsPrivate: msg.GID == 0,
-			Uin:       msg.UID,
+			IsPrivate: msg.IsPrivate,
+			TargetId:  msg.SessionId,
 		})
+	} else {
+		log.Logger.Infoln("[Responser] skip send text")
 	}
 }
 
@@ -104,7 +110,7 @@ func (r *Responser) EmojiSender(msg *element.Message, replyMsg string) {
 
 			prompt := strings.ReplaceAll(utils.EmojiSenderPrompt, "${emojis}", emojis)
 			var historyMsg []llm.Msg
-			historyMsgPack := history.GetHistory().RecallHistory(msg.MsgId, msg.GID == 0, msg.ReplyTo)
+			historyMsgPack := history.GetHistory().RecallHistory(msg.MsgId, msg.IsPrivate, msg.ReplyTo)
 			for _, h := range historyMsgPack {
 				historyMsg = append(historyMsg, llm.Msg{
 					Role:    llm.USER,
@@ -142,8 +148,8 @@ func (r *Responser) EmojiSender(msg *element.Message, replyMsg string) {
 				}
 				utils.Bus.Publish(utils.SendMsg, &element.SendMessage{
 					Element:   &[]element.Element{f},
-					IsPrivate: msg.GID == 0,
-					Uin:       msg.UID,
+					IsPrivate: msg.IsPrivate,
+					TargetId:  msg.SessionId,
 				})
 			}
 		} else {
