@@ -55,12 +55,14 @@ func (r *Responser) ReplyMsg(msg *element.Message) {
 	historyMsgPack := history.GetHistory().RecallHistory(msg.SessionId, msg.IsPrivate, msg.ReplyTo)
 	for _, h := range historyMsgPack {
 		role := llm.USER
+		content := h.ReadableContent()
 		if h.UID == botUIN {
 			role = llm.ASSIST
+			content = h.Content
 		}
 		historyMsg = append(historyMsg, llm.Msg{
 			Role:    role,
-			Content: h.ReadableContent(),
+			Content: content,
 		})
 	}
 	historyMsg = append(historyMsg, llm.Msg{
