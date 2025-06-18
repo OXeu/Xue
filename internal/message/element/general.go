@@ -16,15 +16,16 @@ type Type = int
 
 type Message struct {
 	gorm.Model
-	Id        uint   `gorm:"primaryKey" json:"id,omitempty"`
-	MsgId     uint32 `json:"msg_id,omitempty"` // 本地 id，查找时需要结合 UID / SessionId 搜索
-	UID       uint32 `json:"uid,omitempty"`
-	NickName  string `json:"nick_name,omitempty"`
-	SessionId uint32 `json:"session_id,omitempty"` // 群 id / 私聊 id
-	IsPrivate bool   `json:"is_private"`
-	ReplyTo   uint32 `json:"reply_to,omitempty"` // 回复消息的本地 id
-	Time      uint32 `json:"time,omitempty"`
-	Content   string `json:"content,omitempty"`
+	Id            uint   `gorm:"primaryKey" json:"id,omitempty"`
+	MsgId         uint32 `json:"msg_id,omitempty"` // 本地 id，查找时需要结合 UID / SessionId 搜索
+	UID           uint32 `json:"uid,omitempty"`
+	NickName      string `json:"nick_name,omitempty"`
+	SessionId     uint32 `json:"session_id,omitempty"` // 群 id / 私聊 id
+	IsPrivate     bool   `json:"is_private"`
+	ReplyTo       uint32 `json:"reply_to,omitempty"` // 回复消息的本地 id
+	Time          uint32 `json:"time,omitempty"`
+	Content       string `json:"content,omitempty"`
+	IsRelatedToMe bool   `json:"is_related_to_me"`
 }
 
 func (m Message) JsonContent() string {
@@ -75,7 +76,7 @@ func (i Image) ToReadableString() string {
 	image, err := i.GetImage()
 	if err != nil {
 		log.Logger.Error("[Image] read image error: ", err)
-		return "[图片](读取图片失败)"
+		return "[图片](读取图片失败：" + i.Id + ")" + err.Error()
 	}
 	chat, err := llm.GetLLMManager().Chat(llm.IMAGE, utils.ImagePrompt, llm.Msg{
 		Role:    llm.USER,

@@ -6,6 +6,7 @@ import (
 	"github.com/OXeu/Xue/internal/llm"
 	"github.com/OXeu/Xue/internal/log"
 	"github.com/OXeu/Xue/internal/message/element"
+	"github.com/OXeu/Xue/internal/message/protocol"
 	"github.com/OXeu/Xue/internal/utils"
 	"math/rand"
 	"strings"
@@ -49,10 +50,15 @@ func (r *Responser) ReplyMsg(msg *element.Message) {
 	thinkPrompt := strings.ReplaceAll(utils.ReplyThinkPrompt, "${time}", time.Now().Format("2006-01-02 15:04:05"))
 	prompt := strings.ReplaceAll(utils.ReplyPrompt, "${time}", time.Now().Format("2006-01-02 15:04:05"))
 	var historyMsg []llm.Msg
+	botUIN := protocol.GetLagrange().QqClient.Uin
 	historyMsgPack := history.GetHistory().RecallHistory(msg.SessionId, msg.IsPrivate, msg.ReplyTo)
 	for _, h := range historyMsgPack {
+		role := llm.USER
+		if h.UID == botUIN {
+			role = llm.ASSIST
+		}
 		historyMsg = append(historyMsg, llm.Msg{
-			Role:    llm.USER,
+			Role:    role,
 			Content: h.ReadableContent(),
 		})
 	}

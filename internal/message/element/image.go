@@ -8,8 +8,11 @@ import (
 )
 
 func (i *Image) Prefetch() error {
-	md5Name := utils.Md5String(i.Url) + ".png"
-	path, err := utils.Mkdirs("images", md5Name)
+	if len(i.Id) == 0 {
+		md5Name := utils.Md5String(i.Url)
+		i.Id = md5Name + ".jpg"
+	}
+	path, err := utils.Mkdirs("images", i.Id)
 	exists, err := utils.FileExists(path)
 	if err != nil {
 		return err
@@ -36,11 +39,14 @@ func (i *Image) Prefetch() error {
 
 func (i *Image) GetImage() ([]byte, error) {
 	err := i.Prefetch()
+	if len(i.Id) == 0 {
+		md5Name := utils.Md5String(i.Url)
+		i.Id = md5Name + ".jpg"
+	}
+	path, err := utils.Mkdirs("images", i.Id)
 	if err != nil {
 		return nil, err
 	}
-	md5Name := utils.Md5String(i.Url) + ".png"
-	path, err := utils.Mkdirs("images", md5Name)
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err

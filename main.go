@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/OXeu/Xue/internal/cmd"
 	"github.com/OXeu/Xue/internal/face"
 	"github.com/OXeu/Xue/internal/history"
 	"github.com/OXeu/Xue/internal/idle"
@@ -28,6 +29,7 @@ func main() {
 	go reactor.GetInternal().Start()
 	go reactor.GetReactor().Start()
 	go reactor.GetResponser().Start()
+	go cmd.GetHandler().Start()
 
 	// 主程序循环
 	mc := make(chan os.Signal, 2)

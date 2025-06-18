@@ -57,6 +57,25 @@ func (h *History) Start() {
 			return
 		}
 	}()
+	go func() {
+		err := utils.Bus.Subscribe(utils.ClearHistory, h.ClearHistory)
+		if err != nil {
+			log.Logger.Errorln("[history] clear history error:", err)
+			return
+		}
+	}()
+}
+
+func (h *History) ClearHistory(sessionId uint32, isPrivate bool) {
+	h.Db.Where(&element.Message{SessionId: sessionId, IsPrivate: isPrivate}).Delete(&element.Message{})
+	log.Logger.Infoln("[history] clear history:", sessionId, isPrivate)
+	utils.Bus.Publish(utils.SendMsg, &element.SendMessage{
+		TargetId:  sessionId,
+		IsPrivate: isPrivate,
+		Element: &[]element.Element{
+			element.Text("已清空历史记录"),
+		},
+	})
 }
 
 func (h *History) writeSendMessage(message *element.SendMessage) {

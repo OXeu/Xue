@@ -9,6 +9,7 @@ var Bus = eventbus.New()
 const (
 	Started      = "started"
 	ReceiveMsg   = "receive_message"
+	ClearHistory = "clear_history"
 	PreSendMsg   = "pre_send_message"
 	SendMsg      = "send_message"
 	SentMsg      = "sent_message"

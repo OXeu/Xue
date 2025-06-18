@@ -77,7 +77,7 @@ func (l *Lagrange) Start() {
 
 	// 订阅群消息事件
 	l.QqClient.GroupMessageEvent.Subscribe(func(client *client.QQClient, event *message.GroupMessage) {
-		generalMsgContent, replyId := convertMessage(event.Elements)
+		generalMsgContent, replyId, isAtMe := convertMessage(event.Elements)
 		jsonMsg, err := json.Marshal(generalMsgContent)
 		if err != nil {
 			log.Logger.Fatal("json marshal err: ", err)
@@ -88,20 +88,21 @@ func (l *Lagrange) Start() {
 			content += ele.ToReadableString() + "\n"
 		}
 		generalMsg := element.Message{
-			MsgId:     event.ID,
-			UID:       event.Sender.Uin,
-			NickName:  event.Sender.Nickname,
-			SessionId: event.GroupUin,
-			IsPrivate: false,
-			ReplyTo:   replyId,
-			Content:   content,
-			Time:      event.Time,
+			MsgId:         event.ID,
+			UID:           event.Sender.Uin,
+			NickName:      event.Sender.Nickname,
+			SessionId:     event.GroupUin,
+			IsPrivate:     false,
+			ReplyTo:       replyId,
+			Content:       content,
+			Time:          event.Time,
+			IsRelatedToMe: isAtMe,
 		}
 		utils2.Bus.Publish(utils2.ReceiveMsg, &generalMsg)
 	})
 
 	l.QqClient.PrivateMessageEvent.Subscribe(func(client *client.QQClient, msg *message.PrivateMessage) {
-		generalMsgContent, replyId := convertMessage(msg.Elements)
+		generalMsgContent, replyId, isAtMe := convertMessage(msg.Elements)
 		jsonMsg, err := json.Marshal(generalMsgContent)
 		if err != nil {
 			log.Logger.Fatal("json marshal err: ", err)
@@ -112,14 +113,15 @@ func (l *Lagrange) Start() {
 			content += ele.ToReadableString() + "\n"
 		}
 		generalMsg := element.Message{
-			MsgId:     msg.ID,
-			UID:       msg.Sender.Uin,
-			NickName:  msg.Sender.Nickname,
-			SessionId: msg.Sender.Uin,
-			IsPrivate: true,
-			ReplyTo:   replyId,
-			Time:      msg.Time,
-			Content:   content,
+			MsgId:         msg.ID,
+			UID:           msg.Sender.Uin,
+			NickName:      msg.Sender.Nickname,
+			SessionId:     msg.Sender.Uin,
+			IsPrivate:     true,
+			ReplyTo:       replyId,
+			Time:          msg.Time,
+			Content:       content,
+			IsRelatedToMe: isAtMe,
 		}
 		utils2.Bus.Publish(utils2.ReceiveMsg, &generalMsg)
 	})
@@ -234,31 +236,42 @@ func (l *Lagrange) Start() {
 	}
 }
 
-func convertMessage(messages []message.IMessageElement) ([]element.Element, uint32) {
+func convertMessage(messages []message.IMessageElement) ([]element.Element, uint32, bool) {
+	isAt := false
 	commonMsg := make([]element.Element, 0)
 	var replyId uint32
 	for _, ele := range messages {
-		msg, subReplyId := convertMessageElement(ele)
+		msg, subReplyId, at := convertMessageElement(ele)
+		if at {
+			isAt = true
+		}
 		if subReplyId != 0 {
 			replyId = subReplyId
 		}
 		commonMsg = append(commonMsg, msg)
 	}
-	return commonMsg, replyId
+	return commonMsg, replyId, isAt
 }
 
-func convertMessageElement(ele message.IMessageElement) (element.Element, uint32) {
+func convertMessageElement(ele message.IMessageElement) (element.Element, uint32, bool) {
+	isAtMe := false
 	switch ele.(type) {
 	case *message.TextElement:
 		text := ele.(*message.TextElement)
-		return element.Text(text.Content), 0
+		return element.Text(text.Content), 0, false
 	case *message.ReplyElement:
 		reply := ele.(*message.ReplyElement)
-		msg, _ := convertMessage(reply.Elements)
-		return element.ReplyMsg{Msg: msg, ReplyMsgId: reply.ReplySeq, Origin: reply}, reply.ReplySeq
+		msg, _, _ := convertMessage(reply.Elements)
+		if reply.SenderUin == GetLagrange().QqClient.Uin {
+			isAtMe = true
+		}
+		return element.ReplyMsg{Msg: msg, ReplyMsgId: reply.ReplySeq, Origin: reply}, reply.ReplySeq, isAtMe
 	case *message.AtElement:
 		at := ele.(*message.AtElement)
-		return element.AtMsg{Uin: at.TargetUin, Name: at.Display, Origin: at}, 0
+		if at.TargetUin == GetLagrange().QqClient.Uin {
+			isAtMe = true
+		}
+		return element.AtMsg{Uin: at.TargetUin, Name: at.Display, Origin: at}, 0, isAtMe
 	case *message.ImageElement:
 		image := ele.(*message.ImageElement)
 		if image.SubType == 1 {
@@ -270,32 +283,32 @@ func convertMessageElement(ele message.IMessageElement) (element.Element, uint32
 			}
 			log.Logger.Infof("[Lagrange] 接收到表情[%s]: %s, %s, %s", face.Label, face.Id, face.Url, image.Summary)
 			utils2.Bus.Publish(utils2.ReceiveEmoji, &face)
-			return face, 0
+			return face, 0, false
 		} else {
 			// 图片
-			return element.Image{Id: image.ImageID, Alt: image.Summary, Url: image.URL}, 0
+			return element.Image{Id: image.ImageID, Alt: image.Summary, Url: image.URL}, 0, false
 		}
 	case *message.LightAppElement:
 		app := ele.(*message.LightAppElement)
 		log.Logger.Printf("light app element: %s", app.Content)
-		return nil, 0
+		return nil, 0, false
 	case *message.XMLElement:
 		xml := ele.(*message.XMLElement)
 		log.Logger.Printf("xml element: %s", xml.Content)
-		return nil, 0
+		return nil, 0, false
 	case *message.ForwardMessage:
 		forward := ele.(*message.ForwardMessage)
 		elements := make([][]element.Element, 0)
 		for _, node := range forward.Nodes {
-			data, _ := convertMessage(node.Message)
+			data, _, _ := convertMessage(node.Message)
 			elements = append(elements, data)
 		}
-		return element.ForwardMsg{Elements: elements, Origin: forward}, 0
+		return element.ForwardMsg{Elements: elements, Origin: forward}, 0, false
 	case *message.MarketFaceElement:
 		face := ele.(*message.MarketFaceElement)
-		return element.CustomFaceElement{Label: face.Summary, Url: ""}, 0
+		return element.CustomFaceElement{Label: face.Summary, Url: ""}, 0, false
 	default:
 		log.Logger.Printf("unknown element type: %d", ele.Type())
 	}
-	return nil, 0
+	return nil, 0, false
 }
