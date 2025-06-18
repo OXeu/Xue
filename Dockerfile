@@ -7,7 +7,7 @@ COPY . .
 RUN CGO_ENABLED=1 GOOS=linux go build -o /app/main .
 
 FROM alpine:latest
-RUN apk --no-cache add ca-certificates
+RUN apk --no-cache add ca-certificates tzdata
 COPY --from=builder /app/main /app/main
 WORKDIR /app
 CMD ["/app/main"]
