@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/OXeu/Xue/internal/config"
 	"github.com/OXeu/Xue/internal/log"
-	"github.com/goccy/go-yaml"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/sirupsen/logrus"
@@ -32,15 +32,7 @@ var (
 
 func GetLLMManager() *Manager {
 	once.Do(func() {
-		configYaml, err := GetConfigYaml()
-		if err != nil {
-			panic(err)
-		}
-		var modelConfigs Config
-		err = yaml.Unmarshal(configYaml, &modelConfigs)
-		if err != nil {
-			panic(err)
-		}
+		modelConfigs := config.GetConfig()
 		var models []Model
 		for _, modelConfig := range modelConfigs.Models {
 			models = append(models, Model{

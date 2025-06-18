@@ -4,11 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/OXeu/Xue/internal/llm"
+	"github.com/OXeu/Xue/internal/config"
 	"github.com/OXeu/Xue/internal/log"
 	"github.com/OXeu/Xue/internal/message/element"
 	"github.com/OXeu/Xue/internal/utils"
-	"github.com/goccy/go-yaml"
 	"github.com/philippgille/chromem-go"
 	"strconv"
 	"sync"
@@ -26,18 +25,10 @@ var embedding *Embedding
 var embeddingOnce sync.Once
 
 func GetEmbedding() *Embedding {
-	configYaml, err := llm.GetConfigYaml()
-	if err != nil {
-		panic(err)
-	}
-	var modelConfigs llm.Config
-	err = yaml.Unmarshal(configYaml, &modelConfigs)
-	if err != nil {
-		panic(err)
-	}
-	var model llm.OpenAIModel
+	modelConfigs := config.GetConfig()
+	var model config.OpenAIModel
 	for _, modelConfig := range modelConfigs.Models {
-		if modelConfig.Ability&llm.EMBEDDING != 0 {
+		if modelConfig.Ability&config.EMBEDDING != 0 {
 			model = modelConfig
 			break
 		}

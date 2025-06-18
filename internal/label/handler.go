@@ -1,6 +1,7 @@
 package label
 
 import (
+	"github.com/OXeu/Xue/internal/config"
 	"github.com/OXeu/Xue/internal/llm"
 	"github.com/OXeu/Xue/internal/log"
 	"github.com/OXeu/Xue/internal/utils"
@@ -53,7 +54,7 @@ func (h *Handler) handleLabelTask(id string, image []byte, type_ string) {
 	}
 	defer h.working.Remove(id)
 	log.Logger.Info("[Label]", "handle label task: ", id, "type:", type_)
-	label, err := llm.GetLLMManager().Chat(llm.IMAGE, utils.LabelPrompt, llm.Msg{
+	label, err := llm.GetLLMManager().Chat(config.IMAGE, utils.LabelPrompt, llm.Msg{
 		Role:    llm.USER,
 		Content: utils.LabelUserPrompt,
 		Image:   image,

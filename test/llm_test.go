@@ -1,6 +1,7 @@
 package test
 
 import (
+	"github.com/OXeu/Xue/internal/config"
 	"github.com/OXeu/Xue/internal/llm"
 	"github.com/OXeu/Xue/internal/utils"
 	"io"
@@ -10,7 +11,7 @@ import (
 )
 
 func TestLLMChat(t *testing.T) {
-	response, err := llm.GetLLMManager().Chat(llm.CHAT, "你的名字是 Xue，请牢记你的名字", []llm.Msg{
+	response, err := llm.GetLLMManager().Chat(config.CHAT, "你的名字是 Xue，请牢记你的名字", []llm.Msg{
 		{
 			Role:    "user",
 			Content: "你是谁？",
@@ -38,7 +39,7 @@ func TestLLMMultiModal(t *testing.T) {
 	if err != nil {
 		t.Errorf("read error: %v", err)
 	}
-	response, err := llm.GetLLMManager().Chat(llm.IMAGE, utils.LabelPrompt, []llm.Msg{
+	response, err := llm.GetLLMManager().Chat(config.IMAGE, utils.LabelPrompt, []llm.Msg{
 		{
 			Role:    "user",
 			Content: utils.LabelUserPrompt,
@@ -52,7 +53,7 @@ func TestLLMMultiModal(t *testing.T) {
 }
 
 func TestLLMThink(t *testing.T) {
-	response, err := llm.GetLLMManager().Chat(llm.THINK, "你的名字是 Xue，请牢记你的名字", []llm.Msg{
+	response, err := llm.GetLLMManager().Chat(config.THINK, "你的名字是 Xue，请牢记你的名字", []llm.Msg{
 		{
 			Role:    "user",
 			Content: "3.11 和 3.8 两个数字哪个大？",
@@ -68,7 +69,7 @@ func TestLLMThink(t *testing.T) {
 }
 
 func TestLLMThinkMig(t *testing.T) {
-	response, err := llm.GetLLMManager().Chat(llm.THINK, "你的名字是 Xue，请牢记你的名字", []llm.Msg{
+	response, err := llm.GetLLMManager().Chat(config.THINK, "你的名字是 Xue，请牢记你的名字", []llm.Msg{
 		{
 			Role:    "user",
 			Content: "3.11 和 3.8 两个数字哪个大？",
@@ -81,7 +82,7 @@ func TestLLMThinkMig(t *testing.T) {
 	if len(response.ReasoningContent) == 0 {
 		t.Errorf("no reasoning")
 	}
-	responseNew, err := llm.GetLLMManager().Chat(llm.CHAT, "你的名字是 Xue，请牢记你的名字", []llm.Msg{
+	responseNew, err := llm.GetLLMManager().Chat(config.CHAT, "你的名字是 Xue，请牢记你的名字", []llm.Msg{
 		{
 			Role:    llm.USER,
 			Content: "3.11 和 3.8 两个数字哪个大？",

@@ -1,6 +1,7 @@
 package reactor
 
 import (
+	"github.com/OXeu/Xue/internal/config"
 	"github.com/OXeu/Xue/internal/llm"
 	"github.com/OXeu/Xue/internal/log"
 	"github.com/OXeu/Xue/internal/utils"
@@ -90,7 +91,7 @@ func (i *Internal) UpdateCurrentPlan() {
 }
 
 func GetDailyPlan() {
-	chat, err := llm.GetLLMManager().Chat(llm.CHAT, utils.DailyPlanPrompt, llm.Msg{
+	chat, err := llm.GetLLMManager().Chat(config.CHAT, utils.DailyPlanPrompt, llm.Msg{
 		Role: llm.USER,
 		Content: `{
 	"location": "武汉",

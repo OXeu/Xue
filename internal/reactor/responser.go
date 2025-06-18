@@ -1,6 +1,7 @@
 package reactor
 
 import (
+	"github.com/OXeu/Xue/internal/config"
 	"github.com/OXeu/Xue/internal/face"
 	"github.com/OXeu/Xue/internal/history"
 	"github.com/OXeu/Xue/internal/llm"
@@ -66,7 +67,7 @@ func (r *Responser) ReplyMsg(msg *element.Message) {
 		Role:    llm.USER,
 		Content: msg.ReadableContent(),
 	})
-	chat, err := llm.GetLLMManager().Chat(llm.THINK, thinkPrompt, historyMsg...)
+	chat, err := llm.GetLLMManager().Chat(config.THINK, thinkPrompt, historyMsg...)
 	if err != nil {
 		log.Logger.Errorf("[Responser] think error: %v", err)
 		return
@@ -75,7 +76,7 @@ func (r *Responser) ReplyMsg(msg *element.Message) {
 		Role:    llm.ASSIST,
 		Content: "<think>" + chat.ReasoningContent + "</think>",
 	})
-	chatNext, err := llm.GetLLMManager().Chat(llm.CHAT, prompt, historyMsg...)
+	chatNext, err := llm.GetLLMManager().Chat(config.CHAT, prompt, historyMsg...)
 	if err != nil {
 		log.Logger.Errorf("[Responser] chat error: %v", err)
 		return
@@ -131,7 +132,7 @@ func (r *Responser) EmojiSender(msg *element.Message, replyMsg string) {
 				Role:    llm.ASSIST,
 				Content: replyMsg,
 			})
-			chat, err := llm.GetLLMManager().Chat(llm.CHAT, prompt, historyMsg...)
+			chat, err := llm.GetLLMManager().Chat(config.CHAT, prompt, historyMsg...)
 			if err != nil {
 				log.Logger.Errorf("[Responser] emoji send chat error: %v", err)
 				return

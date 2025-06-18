@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/LagrangeDev/LagrangeGo/message"
+	"github.com/OXeu/Xue/internal/config"
 	"github.com/OXeu/Xue/internal/llm"
 	"github.com/OXeu/Xue/internal/log"
 	"github.com/OXeu/Xue/internal/utils"
@@ -78,7 +79,7 @@ func (i Image) ToReadableString() string {
 		log.Logger.Error("[Image] read image error: ", err)
 		return "[图片](读取图片失败：" + i.Id + ")" + err.Error()
 	}
-	chat, err := llm.GetLLMManager().Chat(llm.IMAGE, utils.ImagePrompt, llm.Msg{
+	chat, err := llm.GetLLMManager().Chat(config.IMAGE, utils.ImagePrompt, llm.Msg{
 		Role:    llm.USER,
 		Content: "",
 		Image:   image,

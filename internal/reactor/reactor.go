@@ -1,6 +1,7 @@
 package reactor
 
 import (
+	"github.com/OXeu/Xue/internal/config"
 	"github.com/OXeu/Xue/internal/log"
 	"github.com/OXeu/Xue/internal/message/element"
 	"github.com/OXeu/Xue/internal/utils"
@@ -39,6 +40,14 @@ func (r *Reactor) Start() {
 // 响应消息（即时）
 func (r *Reactor) reactMessage(msg *element.Message) {
 	// 获取当前计划
+	conf := config.GetConfig()
+	grpRate := float32(1.0)
+	for _, g := range conf.Groups {
+		if g.Uin == msg.SessionId {
+			grpRate = g.Rate
+			break
+		}
+	}
 	react := false
 	if msg.IsPrivate {
 		react = true
@@ -49,14 +58,12 @@ func (r *Reactor) reactMessage(msg *element.Message) {
 		plan := internal.Current
 		if plan != nil {
 			rate := rand.Float32()
-			if rate < plan.GetResponseRate() {
+			if rate < plan.GetResponseRate()*grpRate {
 				// response
-				log.Logger.Infoln("[Reactor] try reply message")
-				utils.Bus.Publish(utils.ReplyMsg, msg)
+				react = true
 			} else {
-				log.Logger.Infof("[Reactor] %f > %f, skip response", rate, plan.GetResponseRate())
+				log.Logger.Infof("[Reactor] %f > (%f * %f) = %f, skip response", rate, plan.GetResponseRate(), grpRate, plan.GetResponseRate()*grpRate)
 			}
-		} else {
 		}
 	}
 	if react {

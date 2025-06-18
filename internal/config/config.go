@@ -1,10 +1,12 @@
-package llm
+package config
 
 import (
 	"errors"
 	"github.com/OXeu/Xue/internal/log"
+	"github.com/goccy/go-yaml"
 	"io"
 	"os"
+	"sync"
 )
 
 const (
@@ -16,6 +18,12 @@ const (
 	EMBEDDING = 1 << 5 // 向量模型
 )
 
+type Group struct {
+	Name string  `yaml:"name"`
+	Uin  uint32  `yaml:"uin"`
+	Rate float32 `yaml:"rate"`
+}
+
 type OpenAIModel struct {
 	Name    string `yaml:"name"`
 	BaseUrl string `yaml:"base_url"`
@@ -26,9 +34,10 @@ type OpenAIModel struct {
 
 type Config struct {
 	Models []OpenAIModel `yaml:"models"`
+	Groups []Group       `yaml:"groups"`
 }
 
-func GetConfigYaml() ([]byte, error) {
+func getConfigYaml() ([]byte, error) {
 	openFunc := func(name string) []byte {
 		f, err := os.Open(name)
 		wd, err := os.Getwd()
@@ -57,4 +66,25 @@ func GetConfigYaml() ([]byte, error) {
 		}
 	}
 	return nil, errors.New("no config file found")
+}
+
+var (
+	config *Config
+	once   sync.Once
+)
+
+func GetConfig() *Config {
+	once.Do(func() {
+		configYaml, err := getConfigYaml()
+		if err != nil {
+			panic(err)
+		}
+		var modelConfigs Config
+		err = yaml.Unmarshal(configYaml, &modelConfigs)
+		if err != nil {
+			panic(err)
+		}
+		config = &modelConfigs
+	})
+	return config
 }
