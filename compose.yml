@@ -1,11 +1,15 @@
 services:
   app:
     container_name: Xue
-    build: .
+    image: thankrain/xue:dev
+    environment:
+      - TZ=Asia/Shanghai
     volumes:
       - ./data:/app/data
-    restart: unless-stopped
+      - ./config.yml:/app/config.yml:ro
+    restart: always
   watchtower:
     image: containrrr/watchtower
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    restart: always
