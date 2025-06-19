@@ -39,7 +39,7 @@ func (m Message) JsonContent() string {
 
 func (m Message) ReadableContent() string {
 	t := time.Unix(int64(m.Time), 0)
-	return fmt.Sprintf("%s\n%s:%s", t.Format("2006-01-02 15:04:05"), m.NickName, m.Content)
+	return fmt.Sprintf("%s\n昵称：%s\n%s", t.Format("2006-01-02 15:04:05"), m.NickName, m.Content)
 }
 
 type Element interface {
