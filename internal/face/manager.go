@@ -1,8 +1,6 @@
 package face
 
 import (
-	"encoding/json"
-	"github.com/OXeu/Xue/internal/idle"
 	"github.com/OXeu/Xue/internal/log"
 	"github.com/OXeu/Xue/internal/message/element"
 	"github.com/OXeu/Xue/internal/utils"
@@ -64,18 +62,11 @@ func (m Manager) ReceiveFace(msg *element.CustomFaceElement) {
 		log.Logger.Error("[FaceManager] save error: ", err)
 		return
 	}
-	if len(msg.Label) == 0 {
-		log.Logger.Infoln("[FaceManager] need to label: ", msg.Id)
-		// 需要识别表情包之后再加入
-		bytes, err := json.Marshal(msg)
-		if err != nil {
-			return
-		}
-		err = idle.GetIdleHandler().EmojiQueue.Put(bytes)
-		if err != nil {
-			return
-		}
+	image, err := msg.GetImage()
+	if err != nil {
+		log.Logger.Error("[FaceManager]", "get image error: ", err)
 	}
+	utils.Bus.Publish(utils.LabelEmoji, msg.Id, image, "emoji")
 }
 
 func (m Manager) SaveFace(id, label string) {
@@ -94,6 +85,17 @@ func (m Manager) GetFaces() []element.CustomFaceElement {
 	}
 	return faces
 }
+
+func (m Manager) GetUnlabeledFaces() []element.CustomFaceElement {
+	var faces []element.CustomFaceElement
+	m.Db.Where(&element.CustomFaceElement{Label: ""}).Find(&faces)
+	log.Logger.Infoln("[FaceManager]", "get faces", len(faces))
+	for _, face := range faces {
+		log.Logger.Infoln("[FaceManager]", "face", face.Label, face.Id)
+	}
+	return faces
+}
+
 func (m Manager) GetFace(id string) element.CustomFaceElement {
 	var face element.CustomFaceElement
 	m.Db.Where("id = ?", id).Find(&face)

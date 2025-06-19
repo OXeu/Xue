@@ -1,19 +1,17 @@
 package idle
 
 import (
-	"encoding/json"
+	"github.com/OXeu/Xue/internal/face"
 	"github.com/OXeu/Xue/internal/log"
-	"github.com/OXeu/Xue/internal/message/element"
 	"github.com/OXeu/Xue/internal/utils"
+	"github.com/robfig/cron/v3"
 	"os"
 	path2 "path"
 	"sync"
-	"time"
 )
 
 // Handler 闲时处理器，队列内容需要持久化
 type Handler struct {
-	EmojiQueue utils.Interface
 }
 
 var (
@@ -29,27 +27,26 @@ func GetIdleHandler() *Handler {
 			log.Logger.Errorf("创建 idle 数据目录失败: %v", err)
 			return
 		}
-		db := utils.New("emoji", dir, 65535*100, 0, 65535, 2500, 2*time.Second, nil)
-		instance = &Handler{
-			EmojiQueue: db,
-		}
+		instance = &Handler{}
 	})
 	return instance
 }
 
 func (h *Handler) Start() {
-	emojiQueue := h.EmojiQueue.ReadChan()
-	for emoji := range emojiQueue {
-		emojiMsg := element.CustomFaceElement{}
-		err := json.Unmarshal(emoji, &emojiMsg)
-		if err != nil {
-			continue
+	// 每 5 分钟扫描未标记的表情包
+	_, err := cron.New(cron.WithSeconds()).AddFunc("0 0/5 * * * *", func() {
+		unlabeledEmojis := face.GetFaceManager().GetUnlabeledFaces()
+		log.Logger.Infof("[Idle] 扫描 %d 个未标记的表情包", len(unlabeledEmojis))
+		for _, emojiMsg := range unlabeledEmojis {
+			image, err := emojiMsg.GetImage()
+			if err != nil {
+				continue
+			}
+			utils.Bus.Publish(utils.LabelEmoji, emojiMsg.Id, image, "emoji")
 		}
-		image, err := emojiMsg.GetImage()
-		if err != nil {
-			continue
-		}
-		utils.Bus.Publish(utils.LabelEmoji, emojiMsg.Id, image, "emoji")
+	})
+	if err != nil {
+		log.Logger.Error("[Idle]", "add cron job failed: ", err)
 	}
 }
 
