@@ -51,19 +51,21 @@ func GetInternal() *Internal {
 
 func (i *Internal) Start() {
 	GetDailyPlan()
-	_, err := cron.New(cron.WithSeconds()).AddFunc("0 0 0 * * *", func() {
+	c := cron.New(cron.WithSeconds())
+	_, err := c.AddFunc("0 0 0 * * *", func() {
 		// 每日生成当日活动计划
 		GetDailyPlan()
 	})
 	if err != nil {
 		log.Logger.Errorf("[Internal Schedule] cron error: %v", err)
 	}
-	_, err = cron.New(cron.WithSeconds()).AddFunc("0 * * * * *", func() {
+	_, err = c.AddFunc("0 * * * * *", func() {
 		i.UpdateCurrentPlan()
 	})
 	if err != nil {
 		log.Logger.Errorf("[Internal Schedule] cron error: %v", err)
 	}
+	c.Start()
 }
 
 func (i *Internal) UpdateCurrentPlan() {

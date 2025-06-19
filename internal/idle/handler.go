@@ -34,7 +34,8 @@ func GetIdleHandler() *Handler {
 
 func (h *Handler) Start() {
 	// 每 5 分钟扫描未标记的表情包
-	_, err := cron.New(cron.WithSeconds()).AddFunc("0 0/5 * * * *", func() {
+	c := cron.New(cron.WithSeconds())
+	_, err := c.AddFunc("0 0/5 * * * *", func() {
 		unlabeledEmojis := face.GetFaceManager().GetUnlabeledFaces()
 		log.Logger.Infof("[Idle] 扫描 %d 个未标记的表情包", len(unlabeledEmojis))
 		for _, emojiMsg := range unlabeledEmojis {
@@ -45,6 +46,7 @@ func (h *Handler) Start() {
 			utils.Bus.Publish(utils.LabelEmoji, emojiMsg.Id, image, "emoji")
 		}
 	})
+	c.Start()
 	if err != nil {
 		log.Logger.Error("[Idle]", "add cron job failed: ", err)
 	}
