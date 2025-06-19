@@ -54,16 +54,22 @@ func (r *Responser) ReplyMsg(msg *element.Message) {
 	botUIN := protocol.GetLagrange().QqClient.Uin
 	historyMsgPack := history.GetHistory().RecallHistory(msg.SessionId, msg.IsPrivate, msg.ReplyTo)
 	for _, h := range historyMsgPack {
-		role := llm.USER
-		content := h.ReadableContent()
 		if h.UID == botUIN {
-			role = llm.ASSIST
-			content = h.Content
+			contentSplit := strings.Split(h.Content, ";")
+			for _, c := range contentSplit {
+				if len(c) > 0 {
+					historyMsg = append(historyMsg, llm.Msg{
+						Role:    llm.ASSIST,
+						Content: c,
+					})
+				}
+			}
+		} else {
+			historyMsg = append(historyMsg, llm.Msg{
+				Role:    llm.USER,
+				Content: h.ReadableContent(),
+			})
 		}
-		historyMsg = append(historyMsg, llm.Msg{
-			Role:    role,
-			Content: content,
-		})
 	}
 	historyMsg = append(historyMsg, llm.Msg{
 		Role:    llm.USER,
