@@ -25,7 +25,7 @@ func TestFace(t *testing.T) {
 func TestFaceSend(t *testing.T) {
 	go protocol.GetLagrange().Start()
 	utils.Bus.Subscribe(utils.Started, func() {
-		faces := face.GetFaceManager().GetFaces()
+		faces := face.GetFaceManager().GetLabeledFaces()
 		if len(faces) > 1 {
 			f := faces[0]
 			utils.Bus.Publish(utils.SendMsg, &element.SendMessage{

@@ -76,10 +76,20 @@ func (m Manager) SaveFace(id, label string) {
 	log.Logger.Infoln("[FaceManager]", "saved face label", msg.Label, " -> ", msg.Md5)
 }
 
-func (m Manager) GetFaces() []element.CustomFaceElement {
+func (m Manager) GetLabeledFaces() []element.CustomFaceElement {
 	var faces []element.CustomFaceElement
 	m.Db.Where("label != ''").Find(&faces)
 	log.Logger.Infoln("[FaceManager]", "get faces", len(faces))
+	for _, face := range faces {
+		log.Logger.Infoln("[FaceManager]", "face", face.Label, face.Id)
+	}
+	return faces
+}
+
+func (m Manager) GetAllFaces() []element.CustomFaceElement {
+	var faces []element.CustomFaceElement
+	m.Db.Find(&faces)
+	log.Logger.Infoln("[FaceManager]", "get all faces", len(faces))
 	for _, face := range faces {
 		log.Logger.Infoln("[FaceManager]", "face", face.Label, face.Id)
 	}

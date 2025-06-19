@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8"/>
+	<script defer src="alpine.js"></script>
+	<title>Title</title>
+	<script lang="js">
+		function getEmojis() {
+			return {
+				emojis: [],
+				async fetchEmojis() {
+					const response = await fetch('/api/emojis');
+					const resp = await response.json();
+					this.emojis = resp.emojis;
+				}
+			}
+		}
+		function formatTime(d) {
+			const date = new Date(d);
+			return date.toLocaleString();
+		}
+		function formatLabel(label) {
+			if (label && label !== "") {
+				return label;
+			}
+			return "未标注";
+		}
+	</script>
+	<style>
+		* {
+			font-family: "system-ui";
+		}
+		.img {
+			height: 100px;
+			border-radius: 10px;
+		}
+		li {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			padding: 8px;
+			border: 1px rgba(0,0,0,0.05) solid;
+			border-radius: 10px;
+		}
+		li:hover {
+			background-color: rgba(0,0,0,0.1);
+		}
+		.li-container {
+			display: flex;
+			flex-direction: row;
+			flex-wrap: wrap;
+			gap: 16px;
+		}
+		#emoji_id {
+			font-size: 12px;
+			margin-top: 4px;
+			color: rgba(0,0,0,0.5);
+			font-family: sans-serif;
+		}
+		#emoji_label {
+			margin-top: 8px;
+			font-size: 16px;
+		}
+		#emoji_time {
+			font-size: 12px;
+			margin-top: 4px;
+			color: rgba(0,0,0,0.5);
+			font-family: sans-serif;
+		}
+		p {
+			margin: 0;
+		}
+		body {
+			margin: 24px;
+		}
+	</style>
+</head>
+<body>
+<h1>Emojis</h1>
+<div class="li-container" x-data="getEmojis" x-init="await fetchEmojis()">
+	<template x-for="emoji in emojis">
+		<li>
+			<img class="img" :src="'api/emoji/'+emoji.id" :alt="emoji.label"/>
+			<p id="emoji_label" x-text="formatLabel(emoji.label)"></p>
+			<p id="emoji_id" x-text="emoji.id"></p>
+			<p id="emoji_time" x-text="formatTime(emoji.CreatedAt)"></p>
+		</li>
+	</template>
+</div>
+</body>
+</html>

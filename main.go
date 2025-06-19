@@ -1,6 +1,8 @@
 package main
 
 import (
+	"embed"
+	"github.com/OXeu/Xue/internal/api"
 	"github.com/OXeu/Xue/internal/cmd"
 	"github.com/OXeu/Xue/internal/face"
 	"github.com/OXeu/Xue/internal/history"
@@ -14,6 +16,9 @@ import (
 	"syscall"
 	"time"
 )
+
+//go:embed static
+var f embed.FS
 
 func main() {
 	_, err := utils.Mkdirs("data")
@@ -30,6 +35,7 @@ func main() {
 	go reactor.GetReactor().Start()
 	go reactor.GetResponser().Start()
 	go cmd.GetHandler().Start()
+	go api.GetHandler(&f).Start()
 
 	// 主程序循环
 	mc := make(chan os.Signal, 2)

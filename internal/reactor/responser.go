@@ -116,7 +116,7 @@ func (r *Responser) EmojiSender(msg *element.Message, replyMsg string) {
 	rate := rand.Float32()
 	if rate < 0.9 {
 		log.Logger.Infoln("[Responser] start emoji sender")
-		faces := face.GetFaceManager().GetFaces()
+		faces := face.GetFaceManager().GetLabeledFaces()
 		if len(faces) > 0 {
 			emojis := ""
 			for _, f := range faces {
