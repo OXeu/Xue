@@ -34,6 +34,11 @@
 		.img {
 			height: 7rem;
 			border-radius: 0.7rem;
+			max-width: 100%;
+			@media screen and (max-width: 480px) {
+				height: unset;
+				max-height: 7rem;
+			}
 		}
 		li {
 			display: flex;
@@ -42,6 +47,7 @@
 			padding: 0.25rem;
 			border: 1px rgba(0,0,0,0.05) solid;
 			border-radius: 0.7rem;
+			justify-content: center;
 		}
 		li:hover {
 			background-color: rgba(0,0,0,0.1);
