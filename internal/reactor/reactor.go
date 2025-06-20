@@ -41,7 +41,7 @@ func (r *Reactor) Start() {
 func (r *Reactor) reactMessage(msg *element.Message) {
 	// 获取当前计划
 	conf := config.GetConfig()
-	grpRate := float32(1.0)
+	grpRate := float32(0)
 	for _, g := range conf.Groups {
 		if g.Uin == msg.SessionId {
 			grpRate = g.Rate
