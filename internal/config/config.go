@@ -33,8 +33,9 @@ type OpenAIModel struct {
 }
 
 type Config struct {
-	Models []OpenAIModel `yaml:"models"`
-	Groups []Group       `yaml:"groups"`
+	ThinkMove bool          `yaml:"think_move"`
+	Models    []OpenAIModel `yaml:"models"`
+	Groups    []Group       `yaml:"groups"`
 }
 
 func getConfigYaml() ([]byte, error) {

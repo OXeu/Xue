@@ -43,6 +43,7 @@ func (r *Responser) Start() {
 }
 
 func (r *Responser) ReplyMsg(msg *element.Message) {
+	conf := config.GetConfig()
 	if r.isResponding.TryLock() == false {
 		log.Logger.Infoln("[Reactor] is responding, skip")
 		return
@@ -80,17 +81,22 @@ func (r *Responser) ReplyMsg(msg *element.Message) {
 		log.Logger.Errorf("[Responser] think error: %v", err)
 		return
 	}
-	historyMsg = append(historyMsg, llm.Msg{
-		Role:    llm.ASSIST,
-		Content: "<think>" + chat.ReasoningContent + "</think>",
-	})
-	chatNext, err := llm.GetLLMManager().Chat(config.CHAT, prompt, historyMsg...)
-	if err != nil {
-		log.Logger.Errorf("[Responser] chat error: %v", err)
-		return
+	if !conf.ThinkMove {
+		log.Logger.Infoln("[Responser] ", chat)
+		utils.Bus.Publish(utils.PreSendMsg, msg, chat.Content)
+	} else {
+		historyMsg = append(historyMsg, llm.Msg{
+			Role:    llm.ASSIST,
+			Content: "<think>" + chat.ReasoningContent + "</think>",
+		})
+		chatNext, err := llm.GetLLMManager().Chat(config.CHAT, prompt, historyMsg...)
+		if err != nil {
+			log.Logger.Errorf("[Responser] chat error: %v", err)
+			return
+		}
+		log.Logger.Infoln("[Responser] ", chatNext)
+		utils.Bus.Publish(utils.PreSendMsg, msg, chatNext.Content)
 	}
-	log.Logger.Infoln("[Responser] ", chatNext)
-	utils.Bus.Publish(utils.PreSendMsg, msg, chatNext.Content)
 }
 
 func (r *Responser) PostHandleMsg(msg *element.Message, replyMsg string) {
