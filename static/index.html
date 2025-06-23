@@ -90,11 +90,21 @@
 		.unlabeled {
 			color: rgba(0,0,0,0.5);
 		}
+		.h1 {
+			font-size: 2rem;
+			font-weight: bold;
+		}
+		.hint {
+			font-size: 0.75rem;
+			color: rgba(0,0,0,0.5);
+		}
 	</style>
 </head>
-<body>
-<h1>Emojis</h1>
-<div class="li-container" x-data="getEmojis" x-init="await fetchEmojis()">
+<body x-data="getEmojis" x-init="await fetchEmojis()">
+<span class="h1">Emojis</span>
+<span class="hint">共 <span x-text="emojis.length"></span> 张表情
+</span>
+<div class="li-container">
 	<template x-for="emoji in emojis">
 		<li>
 			<img class="img" :src="'api/emoji/'+emoji.id" :alt="emoji.label"/>

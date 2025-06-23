@@ -85,7 +85,9 @@ func (l *Lagrange) Start() {
 		log.Logger.Printf("Received group message(%d,%d,%d,%d) %s : %v", event.ID, event.InternalID, event.GroupUin, event.Time, event.Sender.UID, string(jsonMsg))
 		var content string
 		for _, ele := range generalMsgContent {
-			content += ele.ToReadableString() + "\n"
+			if ele != nil {
+				content += ele.ToReadableString() + "\n"
+			}
 		}
 		generalMsg := element.Message{
 			MsgId:         event.ID,
@@ -98,7 +100,7 @@ func (l *Lagrange) Start() {
 			Time:          event.Time,
 			IsRelatedToMe: isAtMe,
 		}
-		utils2.Bus.Publish(utils2.ReceiveMsg, &generalMsg)
+		utils2.Bus.Publish(utils2.PreReceiveMsg, &generalMsg)
 	})
 
 	l.QqClient.PrivateMessageEvent.Subscribe(func(client *client.QQClient, msg *message.PrivateMessage) {
@@ -123,7 +125,7 @@ func (l *Lagrange) Start() {
 			Content:       content,
 			IsRelatedToMe: isAtMe,
 		}
-		utils2.Bus.Publish(utils2.ReceiveMsg, &generalMsg)
+		utils2.Bus.Publish(utils2.PreReceiveMsg, &generalMsg)
 	})
 
 	l.QqClient.DisconnectedEvent.Subscribe(func(client *client.QQClient, event *client.DisconnectedEvent) {

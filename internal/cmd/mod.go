@@ -24,7 +24,7 @@ func GetHandler() *Handler {
 }
 
 func (h *Handler) Start() {
-	err := utils.Bus.Subscribe(utils.ReceiveMsg, h.handle)
+	err := utils.Bus.Subscribe(utils.PreReceiveMsg, h.handle)
 	if err != nil {
 		log.Logger.Errorln("[handler] subscribe receive message failed:", err)
 	}
@@ -33,5 +33,7 @@ func (h *Handler) Start() {
 func (h *Handler) handle(msg *element.Message) {
 	if strings.Contains(msg.Content, "#clear") {
 		utils.Bus.Publish(utils.ClearHistory, msg.SessionId, msg.IsPrivate)
+	} else {
+		utils.Bus.Publish(utils.ReceiveMsg, msg)
 	}
 }

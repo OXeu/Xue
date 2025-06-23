@@ -98,7 +98,7 @@ func (r *Responser) PostHandleMsg(msg *element.Message, replyMsg string) {
 	// 后处理，随机添加表情包，随机添加错别字，随机字典替换
 	r.EmojiSender(msg, replyMsg)
 	rate := rand.Float32()
-	if rate < 0.8 {
+	if rate < 0.99 {
 		utils.Bus.Publish(utils.SendMsg, &element.SendMessage{
 			Element: &[]element.Element{
 				element.Text(replyMsg),
