@@ -109,7 +109,7 @@ func (h *History) RecallHistory(sessionId uint32, isPrivate bool, replyId uint32
 
 func (h *History) ReadLatest(sessionId uint32, isPrivate bool) []element.Message {
 	var historyItems []element.Message
-	h.Db.Where(&element.Message{SessionId: sessionId, IsPrivate: isPrivate}).Limit(Limit).Find(&historyItems)
+	h.Db.Where(&element.Message{SessionId: sessionId, IsPrivate: isPrivate}).Order("created_at desc").Limit(Limit).Find(&historyItems)
 	return historyItems
 }
 
