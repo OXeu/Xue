@@ -54,9 +54,9 @@ func (h *Handler) handleLabelTask(id string, image []byte, type_ string) {
 	}
 	defer h.working.Remove(id)
 	log.Logger.Info("[Label]", "handle label task: ", id, "type:", type_)
-	label, err := llm.GetLLMManager().Chat(config.IMAGE, utils.LabelPrompt, llm.Msg{
+	label, err := llm.GetLLMManager().Chat(config.IMAGE, utils.LabelPrompt(), llm.Msg{
 		Role:    llm.USER,
-		Content: utils.LabelUserPrompt,
+		Content: utils.LabelUserPrompt(),
 		Image:   image,
 	})
 	if err != nil {

@@ -39,10 +39,10 @@ func TestLLMMultiModal(t *testing.T) {
 	if err != nil {
 		t.Errorf("read error: %v", err)
 	}
-	response, err := llm.GetLLMManager().Chat(config.IMAGE, utils.LabelPrompt, []llm.Msg{
+	response, err := llm.GetLLMManager().Chat(config.IMAGE, utils.LabelPrompt(), []llm.Msg{
 		{
 			Role:    "user",
-			Content: utils.LabelUserPrompt,
+			Content: utils.LabelUserPrompt(),
 			Image:   bytes,
 		},
 	}...)

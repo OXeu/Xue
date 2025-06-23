@@ -93,7 +93,7 @@ func (i *Internal) UpdateCurrentPlan() {
 }
 
 func GetDailyPlan() {
-	chat, err := llm.GetLLMManager().Chat(config.CHAT, utils.DailyPlanPrompt, llm.Msg{
+	chat, err := llm.GetLLMManager().Chat(config.CHAT, utils.DailyPlanPrompt(), llm.Msg{
 		Role: llm.USER,
 		Content: `{
 	"location": "武汉",

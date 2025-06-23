@@ -80,9 +80,6 @@ func (m Manager) GetLabeledFaces() []element.CustomFaceElement {
 	var faces []element.CustomFaceElement
 	m.Db.Where("label != ''").Find(&faces)
 	log.Logger.Infoln("[FaceManager]", "get faces", len(faces))
-	for _, face := range faces {
-		log.Logger.Infoln("[FaceManager]", "face", face.Label, face.Id)
-	}
 	return faces
 }
 

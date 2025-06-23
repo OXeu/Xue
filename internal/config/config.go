@@ -24,6 +24,11 @@ type Group struct {
 	Rate float32 `yaml:"rate"`
 }
 
+type Prompt struct {
+	Type   string `yaml:"type"`
+	Prompt string `yaml:"prompt"`
+}
+
 type OpenAIModel struct {
 	Name    string `yaml:"name"`
 	BaseUrl string `yaml:"base_url"`
@@ -33,6 +38,7 @@ type OpenAIModel struct {
 }
 
 type Config struct {
+	Prompts   []Prompt      `yaml:"prompts"`
 	ThinkMove bool          `yaml:"think_move"`
 	Models    []OpenAIModel `yaml:"models"`
 	Groups    []Group       `yaml:"groups"`
@@ -88,4 +94,13 @@ func GetConfig() *Config {
 		config = &modelConfigs
 	})
 	return config
+}
+
+func GetPrompt(typ string, defaultV string) string {
+	for _, prompt := range GetConfig().Prompts {
+		if prompt.Type == typ {
+			return prompt.Prompt
+		}
+	}
+	return defaultV
 }

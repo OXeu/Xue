@@ -49,8 +49,8 @@ func (r *Responser) ReplyMsg(msg *element.Message) {
 		return
 	}
 	defer r.isResponding.Unlock()
-	thinkPrompt := strings.ReplaceAll(utils.ReplyThinkPrompt, "${time}", time.Now().Format("2006-01-02 15:04:05"))
-	prompt := strings.ReplaceAll(utils.ReplyPrompt, "${time}", time.Now().Format("2006-01-02 15:04:05"))
+	thinkPrompt := strings.ReplaceAll(utils.ReplyThinkPrompt(), "${time}", time.Now().Format("2006-01-02 15:04:05"))
+	prompt := strings.ReplaceAll(utils.ReplyPrompt(), "${time}", time.Now().Format("2006-01-02 15:04:05"))
 	var historyMsg []llm.Msg
 	botUIN := protocol.GetLagrange().QqClient.Uin
 	historyMsgPack := history.GetHistory().RecallHistory(msg.SessionId, msg.IsPrivate, msg.ReplyTo)
@@ -72,10 +72,6 @@ func (r *Responser) ReplyMsg(msg *element.Message) {
 			})
 		}
 	}
-	historyMsg = append(historyMsg, llm.Msg{
-		Role:    llm.USER,
-		Content: msg.ReadableContent(),
-	})
 	chat, err := llm.GetLLMManager().Chat(config.THINK, thinkPrompt, historyMsg...)
 	if err != nil {
 		log.Logger.Errorf("[Responser] think error: %v", err)
@@ -129,7 +125,7 @@ func (r *Responser) EmojiSender(msg *element.Message, replyMsg string) {
 				emojis += "【" + f.Label + "】"
 			}
 
-			prompt := strings.ReplaceAll(utils.EmojiSenderPrompt, "${emojis}", emojis)
+			prompt := strings.ReplaceAll(utils.EmojiSenderPrompt(), "${emojis}", emojis)
 			var historyMsg []llm.Msg
 			historyMsgPack := history.GetHistory().RecallHistory(msg.MsgId, msg.IsPrivate, msg.ReplyTo)
 			for _, h := range historyMsgPack {
@@ -138,10 +134,6 @@ func (r *Responser) EmojiSender(msg *element.Message, replyMsg string) {
 					Content: h.ReadableContent(),
 				})
 			}
-			historyMsg = append(historyMsg, llm.Msg{
-				Role:    llm.USER,
-				Content: msg.ReadableContent(),
-			})
 			historyMsg = append(historyMsg, llm.Msg{
 				Role:    llm.ASSIST,
 				Content: replyMsg,
