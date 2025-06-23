@@ -18,7 +18,7 @@ import (
 // 响应具体的消息
 
 type Responser struct {
-	isResponding sync.Mutex
+	isResponding sync.Map
 }
 
 func GetResponser() *Responser {
@@ -44,11 +44,12 @@ func (r *Responser) Start() {
 
 func (r *Responser) ReplyMsg(msg *element.Message) {
 	conf := config.GetConfig()
-	if r.isResponding.TryLock() == false {
+	sessionId := msg.SessionId
+	if _, loaded := r.isResponding.LoadOrStore(sessionId, true); loaded {
 		log.Logger.Infoln("[Reactor] is responding, skip")
 		return
 	}
-	defer r.isResponding.Unlock()
+	defer r.isResponding.Delete(sessionId)
 	thinkPrompt := strings.ReplaceAll(utils.ReplyThinkPrompt(), "${time}", time.Now().Format("2006-01-02 15:04:05"))
 	prompt := strings.ReplaceAll(utils.ReplyPrompt(), "${time}", time.Now().Format("2006-01-02 15:04:05"))
 	var historyMsg []llm.Msg
