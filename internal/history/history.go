@@ -7,6 +7,7 @@ import (
 	"github.com/OXeu/Xue/internal/utils"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"slices"
 	"sync"
 	"time"
 )
@@ -110,6 +111,7 @@ func (h *History) RecallHistory(sessionId uint32, isPrivate bool, replyId uint32
 func (h *History) ReadLatest(sessionId uint32, isPrivate bool) []element.Message {
 	var historyItems []element.Message
 	h.Db.Where(&element.Message{SessionId: sessionId, IsPrivate: isPrivate}).Order("created_at desc").Limit(Limit).Find(&historyItems)
+	slices.Reverse(historyItems)
 	return historyItems
 }
 
