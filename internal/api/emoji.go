@@ -6,6 +6,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func GetEmojiCount(g *gin.Context) {
+	faces := face.GetFaceManager().GetAllFaces()
+	g.JSON(200, gin.H{
+		"count": len(faces),
+	})
+}
 func GetEmojis(g *gin.Context) {
 	faces := face.GetFaceManager().GetAllFaces()
 	g.JSON(200, gin.H{

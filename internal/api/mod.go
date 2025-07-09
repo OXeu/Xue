@@ -43,6 +43,7 @@ func (h *Handler) Start() {
 		router.NoRoute(gin.WrapH(http.FileServer(http.FS(staticFp))))
 	}
 	api := router.Group("/api")
+	api.GET("/emojis/count", GetEmojiCount)
 	api.GET("/emojis", GetEmojis)
 	api.GET("/emoji/:id", GetEmoji)
 	api.GET("/ping", func(c *gin.Context) {
