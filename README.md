@@ -13,15 +13,22 @@
 ```
 rin-research-humanize/
 ├── src/
-│   ├── collect-baseline.ts    # 提取 Rin outbox 回信元数据 → JSONL
-│   ├── analyze-baseline.ts    # 分析基线数据 → 报告
-│   └── listen.ts              # OneBot 纯监听客户端（只收不发）
+│   ├── collect-baseline.ts       # 提取 Rin outbox 回信元数据 → JSONL
+│   ├── analyze-baseline.ts       # 分析基线数据 → 报告
+│   ├── analyze-style.ts          # 深度风格分析（句长/标点/语气词/列表）
+│   ├── analyze-raw.ts            # 分析群聊监听 JSONL
+│   ├── style-transformer.ts      # 风格转换原型（6 条规则将 bot 回复真人化）
+│   ├── evaluate-transformer.ts   # 定量评估转换效果 vs 真人参考值
+│   └── listen.ts                 # OneBot 纯监听客户端（只收不发）
 ├── data/
-│   └── baseline/              # 基线 JSONL（已采集 100 条）
+│   └── baseline/                 # 基线 JSONL（已采集 100 条）
 ├── docs/
-│   ├── research-plan.md       # 五个方向的研究计划（已用基线数据校准）
-│   └── baseline-report.md     # 基线分析报告
-└── package.json
+│   ├── research-plan.md          # 五个方向的研究计划（已用数据校准）
+│   ├── baseline-report.md        # 基线分析报告
+│   ├── style-report.md           # 深度风格分析报告
+│   └── experiment-logs/          # 实地测试记录
+├── package.json
+└── tsconfig.json
 ```
 
 ## 现在能做什么
@@ -30,18 +37,32 @@ rin-research-humanize/
 |------|------|
 | `bun run collect-baseline` | 扫描 Rin 的 outbox，提取回复元数据到 JSONL |
 | `bun run analyze-baseline` | 分析基线 JSONL，产出格式化的分析报告 |
+| `bun run analyze-style` | 深度风格分析（句长、标点、语气词、列表、格式化） |
+| `bun run analyze-raw` | 分析群聊监听 JSONL 数据 |
+| `bun run style-demo` | 运行风格转换器，展示 6 条规则的原文→改文对照 |
+| `bun run eval-transformer` | 定量评估：转换后 vs 原文 vs 真人参考值对比 |
 | `bun run listen` | 启动 OneBot 纯监听客户端，采集群聊数据到 `data/raw/` |
 
-## 基线发现（简要）
+## 实验进展
 
-基于 100 封 outbox 回信的分析：
+### style-transformer 原型评估（2026-05-22）
 
-- **回复偏长**：中位数 250 字，P75 达 820 字（真人约 30-150 字）
-- **间隔过密**：相邻回复中位间隔仅 34 秒（真人通常以分钟计）
-- **结构化明显**：长回复多为"分点论述"式排版，一眼 bot
-- **开头单一**：确认性开头仅 2%（"好的/好/嗯"等），低于真人水平
+基于 80 条 outbox 回信的定量评估，6 条转换规则的效果：
 
-详见 `docs/baseline-report.md`，完整基线指标对照表见 `docs/research-plan.md` 的「基线状态」节。
+| 指标 | 原文 | 改文 | 真人参考 | 结果 |
+|------|------|------|---------|------|
+| 平均句长 | 86.5 字 | **30.8 字** | 10~25 字 | ⬇ 接近 |
+| 长句比例(≥50字) | 57.3% | **14.6%** | ≤5% | ⬇ 接近 |
+| 列表行占比 | 28.5% | **0%** | ≤1% | ✅ 达标 |
+| 感叹号/回信 | 0 | **1.1** | 0.5~3 | ✅ 达标 |
+| 省略号/回信 | 0 | **1.6** | 0.5~3 | ✅ 达标 |
+| 语气词密度 | 0‰ | **8.9‰** | 15~40‰ | ⬇ 接近 |
+
+**结论：10 个维度缩小差距，0 个恶化。** 列表消除和标点替换效果最稳，长句截断大幅拉低了句长。详见 `docs/eval-transformer-*.md`。
+
+### 风格基线分析
+
+详见 `docs/style-report.md`。Rin 的回复风格接近技术文档而非群聊：平均句长 88 字（真人 10~25 字），短句仅 3.8%（真人 30~50%），语气词密度为零。这些差距已被校准到 `docs/research-plan.md` 的基线状态表中。
 
 ## 研究方向
 
