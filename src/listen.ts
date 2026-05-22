@@ -281,6 +281,18 @@ function connect(wsUrl: string, accessToken: string): void {
       : `private_${data.user_id}`;
 
     const parsed = parseMessage(data.message);
+
+    // 如果 raw_message 不含图片 CQ 码但 message 是数组格式且有图片段，
+    // 补一条合成 CQ 码，确保 JSONL 中记录完整图片信息，下游 replay 可查。
+    if (!/\[CQ:image/.test(data.raw_message) && Array.isArray(data.message)) {
+      for (const seg of data.message as Array<{ type?: string; data?: Record<string, unknown> }>) {
+        if (seg?.type === "image" && typeof seg.data?.url === "string") {
+          data.raw_message += `[CQ:image,url=${seg.data.url}]`;
+          break;
+        }
+      }
+    }
+
     const entry: ListenEntry = {
       session: sessionId,
       msgId: data.message_id,
