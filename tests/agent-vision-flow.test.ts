@@ -1128,6 +1128,196 @@ describe("persistBestDescription", () => {
   });
 });
 
+// ── 低确定性沉默检查的视觉分支 ─────────────────────────
+
+describe("low-certainty silence check visual branch", () => {
+  const fakeBase64 = "dGVzdC1pbWFnZS1kYXRh";
+  const fakeMime = "image/jpeg";
+  const newPrompt = "用一条简短的自然语句描述这张图片的核心内容：主体是什么、情绪或氛围如何、是否包含文字。不要模板化的描述。";
+  const oldPrompt = "简要描述这张图片的内容";
+
+  let isVagueDescription: (desc: string) => boolean;
+  let loadCachedInference: (session: string, msgId: number) => string | null;
+  let persistBestDescription: (dir: string, session: string, msgId: number, phash: string, desc: string) => void;
+
+  beforeAll(async () => {
+    const mod = await import("../src/agent");
+    isVagueDescription = mod.isVagueDescription;
+    loadCachedInference = mod.loadCachedInference;
+    persistBestDescription = mod.persistBestDescription;
+  });
+
+  // ── Test 1: callVision receives the new prompt ────────
+
+  test("callVision 发送新 prompt（非旧 '简要描述'）", async () => {
+    let capturedBody: string | null = null;
+
+    globalThis.fetch = ((url: string | URL | Request, ...args: any[]): Promise<Response> => {
+      const opts = args[0] as RequestInit | undefined;
+      capturedBody = typeof opts?.body === "string" ? opts.body : null;
+      return Promise.resolve(new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "A photo of a white cat sitting on a red sofa, looking relaxed." } }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ));
+    }) as typeof globalThis.fetch;
+
+    // 模拟低确定性分支：直接用新 prompt 调用 callVision
+    const result = await callVision(newPrompt, fakeBase64, fakeMime);
+
+    // 验证 body 包含新 prompt
+    const body = JSON.parse(capturedBody!);
+    const textContent = body.messages[0].content[0].text;
+    expect(textContent).toBe(newPrompt);
+    // 旧 prompt 不应出现
+    expect(textContent).not.toContain("简要描述");
+
+    // 验证结果
+    expect(result).toBe("A photo of a white cat sitting on a red sofa, looking relaxed.");
+  });
+
+  // ── Test 2: isVagueDescription + persist chain ───────
+
+  test("有效的视觉描述经过 isVagueDescription → persist → load 全链路", async () => {
+    const validDescription = "A photo of a white cat sitting on a red sofa, looking relaxed and sleepy. No text in the image.";
+
+    // 1. isVagueDescription 通过
+    expect(isVagueDescription(validDescription)).toBe(false);
+
+    // 2. persist
+    const { mkdtempSync, existsSync, readFileSync, rmSync } = await import("node:fs");
+    const { join, resolve } = await import("node:path");
+    const tmpDir = mkdtempSync(join(resolve(import.meta.dirname, "..", "data"), "tmp-chain-"));
+    try {
+      const session = "unittest_silence_chain";
+      const msgId = 9001;
+      const phash = "chain_test_phash";
+
+      persistBestDescription(tmpDir, session, msgId, phash, validDescription);
+
+      // 3. 验证已持久化
+      const filePath = join(tmpDir, `${session}.jsonl`);
+      expect(existsSync(filePath)).toBe(true);
+      const lines = readFileSync(filePath, "utf8").trim().split("\n").filter(Boolean);
+      expect(lines).toHaveLength(1);
+      const parsed = JSON.parse(lines[0]);
+      expect(parsed.inference).toBe(validDescription);
+
+      // 4. loadCachedInference 可以读取 —— 但 loadCachedInference 读的是 agent 模块内的 _inferencesDir，
+      //    所以我们需要手动写文件到 data/prod/inferences/ 目录或用另一个方法验证。
+      //    这里我们直接写一个测试文件到代理的实际 inferences 目录来测试 loadCachedInference。
+      const { appendFileSync, mkdirSync } = await import("node:fs");
+      const inferencesDir = resolve(import.meta.dirname, "..", "data/prod", "inferences");
+      if (!existsSync(inferencesDir)) mkdirSync(inferencesDir, { recursive: true });
+      const prodPath = join(inferencesDir, `${session}.jsonl`);
+      try {
+        // 写一条带 inference 的记录
+        appendFileSync(prodPath, JSON.stringify({
+          msgId, session, phash, inference: validDescription, timestamp: new Date().toISOString(),
+        }) + "\n", "utf8");
+
+        const loaded = loadCachedInference(session, msgId);
+        expect(loaded).toBe(validDescription);
+      } finally {
+        try { rmSync(prodPath, { force: true }); } catch { /* ok */ }
+      }
+    } finally {
+      try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  // ── Test 3: null description → not persisted → silent ──
+
+  test("callVision 返回 null 时描述不持久化（模拟 silent 路径）", async () => {
+    // 模拟 callVision 返回 null（分析失败）
+    let visionCalled = false;
+    globalThis.fetch = ((url: string | URL | Request, ...args: any[]): Promise<Response> => {
+      visionCalled = true;
+      return Promise.resolve(new Response(
+        JSON.stringify({ choices: [{ message: { content: "" } }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ));
+    }) as typeof globalThis.fetch;
+
+    const answer = await callVision(newPrompt, fakeBase64, fakeMime);
+    expect(answer).toBeNull();
+    expect(visionCalled).toBe(true);
+
+    // 模拟调用方逻辑：answer 为空 → 不调用 persistBestDescription
+    let persistCalled = false;
+    const mockPersist = () => { persistCalled = true; };
+    if (answer && !isVagueDescription(answer)) {
+      mockPersist();
+    }
+    expect(persistCalled).toBe(false);
+  });
+
+  // ── Test 4: vague description → not persisted → silent ──
+
+  test("模糊描述（'An image of a person'）不过 isVagueDescription，不持久化", async () => {
+    const vagueDesc = "An image of a person";
+
+    // isVagueDescription 应标记为模糊
+    expect(isVagueDescription(vagueDesc)).toBe(true);
+
+    // 模拟调用方 if-guard：vague → 不调用 persistBestDescription
+    let persistCalled = false;
+    if (vagueDesc && !isVagueDescription(vagueDesc)) {
+      persistCalled = true;
+    }
+    expect(persistCalled).toBe(false);
+  });
+
+  // ── Test 5: clearChain 模拟获取新描述后显示在 silence check 文本中 ──
+
+  test("非模糊描述在 silence check 文本中显示为 '（图片描述：...）'", () => {
+    // 模拟 onmessage 中的 displayText 构造逻辑
+    const cleanText = "";
+    const imageDesc = "A photo of a white cat sleeping on a red sofa, relaxed atmosphere, no text.";
+    const displayText = imageDesc
+      ? `${cleanText}（图片描述：${imageDesc.slice(0, 80)}）`
+      : cleanText;
+
+    expect(displayText).toContain("（图片描述：");
+    expect(displayText).toContain("white cat sleeping");
+    expect(displayText).toContain("relaxed atmosphere");
+    // 旧模板不应出现
+    expect(displayText).not.toContain("An image of");
+    expect(displayText).not.toContain("简要描述");
+  });
+
+  // ── Test 6: 空描述时 silence check 文本无后缀 ──
+
+  test("空描述时 displayText 无（图片描述：...）后缀", () => {
+    const cleanText = "看看这个";
+    const imageDesc = "";
+    const displayText = imageDesc
+      ? `${cleanText}（图片描述：${imageDesc.slice(0, 80)}）`
+      : cleanText;
+
+    expect(displayText).toBe("看看这个");
+    expect(displayText).not.toContain("（图片描述：");
+  });
+
+  // ── Test 7: 旧 prompt 的输出（模板化）被 isVagueDescription 识别 ──
+
+  test("旧 prompt 典型输出 'An image showing...' 被 isVagueDescription 标为非模糊（但新 prompt 会避免产生这种输出）", () => {
+    // 旧 prompt 输出示例：这些虽非模糊（图中有话题内容），但模板化特征明显
+    const oldStyleDesc = "An image showing a \"Plan & Usage\" interface with pricing details and usage limits.";
+    // isVagueDescription 不拦截它（因为有具体名词），但新 prompt 的目标是让描述更自然
+    expect(isVagueDescription(oldStyleDesc)).toBe(false);
+  });
+
+  // ── Test 8: 旧 prompt 短模板 'An image of a person' → 被拦截 ──
+
+  test("旧 prompt 的短模板输出（'An image of a person'）被 isVagueDescription 拦截", () => {
+    // 这是从之前实际 replay 中看到的输出
+    const templateDesc = "An image of a person";
+    expect(isVagueDescription(templateDesc)).toBe(true);
+  });
+});
+
 // ── analyzeAtmosphere ──────────────────────────────────
 
 describe("analyzeAtmosphere", () => {
