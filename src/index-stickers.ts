@@ -1,9 +1,9 @@
 /**
- * index-stickers.ts — 从 data/raw/ 扫描消息，提取表情包/图片消息并建立上下文索引。
+ * index-stickers.ts — 从 data/raw/ 扫描消息，提取表情包/图片消息并建立索引。
  *
- * 输出到 data/stickers/{session}.jsonl，每条记录包含：
- * - 表情包/图片本身：URL（图片）或 face ID（表情）
- * - 前后各 3 条消息作为上下文，用于后续推理表情含义
+ * 索引文件（data/stickers/{session}.jsonl）每条记录只存：
+ * - 消息 ID、会话、发送者、类型（image/face）、内容（URL 或 face ID）
+ * - 不含上下文——context 在需要时通过 getStickerContext() 从 data/raw/ 反查
  *
  * 用法:
  *   bun run src/index-stickers.ts                     # 全量索引
@@ -17,12 +17,6 @@ import { join, resolve } from "node:path";
 
 const RAW_DIR = resolve(import.meta.dirname, "../data/raw");
 const STICKERS_DIR = resolve(import.meta.dirname, "../data/stickers");
-
-// 上下文窗口：每条表情消息携带前后各 N 条消息
-const CONTEXT_WINDOW = 3;
-
-/** 被索引的 msgId 集合（每个 session 独立），导出供测试重置。 */
-export const indexed = new Map<string, Set<number>>();
 
 export interface RawEntry {
   session: string;
@@ -49,19 +43,13 @@ export interface StickerEntry {
   /** 图片 URL 或 face ID（如 "123"）。 */
   content: string;
   text: string;
-  /** 前后各 3 条的上下文消息摘要 */
-  context: {
-    time: number;
-    nickname: string;
-    text: string;
-  }[];
 }
 
 function ensureDir(dir: string): void {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 }
 
-function loadExistingIndex(session: string, stickersDir?: string): Set<number> {
+function loadExistingIds(session: string, stickersDir?: string): Set<number> {
   const dir = stickersDir || STICKERS_DIR;
   const path = join(dir, `${session}.jsonl`);
   if (!existsSync(path)) return new Set();
@@ -109,7 +97,7 @@ export function extractContent(e: RawEntry): { type: "image" | "face"; content: 
 }
 
 /**
- * 索引一个会话的表情包消息。导出供测试调用。
+ * 索引一个会话的表情包消息。
  * @param options.rawDir 覆盖 raw 目录（默认 data/raw）
  * @param options.stickersDir 覆盖 stickers 目录（默认 data/stickers）
  */
@@ -122,19 +110,14 @@ export function indexSession(
   ensureDir(stickersDir);
   const rawPath = join(rawDir, `${session}.jsonl`);
   if (!existsSync(rawPath)) {
-    console.log(`  [skip] ${session}: no raw data`);
     return { newCount: 0, existingCount: 0 };
   }
 
   const lines = readFileSync(rawPath, "utf8").trim().split("\n").filter(Boolean);
   const entries: RawEntry[] = lines.map((l) => JSON.parse(l) as RawEntry);
-
-  // 按时间排序（确保可靠）
   entries.sort((a, b) => a.time - b.time);
 
-  // 加载已索引的 msgId
-  const existing = loadExistingIndex(session, stickersDir);
-
+  const existing = loadExistingIds(session, stickersDir);
   let newCount = 0;
   const stickerPath = join(stickersDir, `${session}.jsonl`);
 
@@ -146,17 +129,6 @@ export function indexSession(
     const extracted = extractContent(e);
     if (!extracted) continue;
 
-    // 前后各 CONTEXT_WINDOW 条消息
-    const start = Math.max(0, i - CONTEXT_WINDOW);
-    const end = Math.min(entries.length, i + CONTEXT_WINDOW + 1);
-    const context = entries.slice(start, end)
-      .filter((c) => c.msgId !== e.msgId) // 排除自己
-      .map((c) => ({
-        time: c.time,
-        nickname: c.nickname,
-        text: c.text.slice(0, 200),
-      }));
-
     const sticker: StickerEntry = {
       msgId: e.msgId,
       time: e.time,
@@ -167,7 +139,6 @@ export function indexSession(
       type: extracted.type,
       content: extracted.content,
       text: e.text,
-      context,
     };
 
     appendFileSync(stickerPath, JSON.stringify(sticker) + "\n", "utf8");
@@ -176,6 +147,43 @@ export function indexSession(
 
   console.log(`  ${session}: ${newCount} new stickers (${existing.size} already indexed)`);
   return { newCount, existingCount: existing.size };
+}
+
+/**
+ * 从 data/raw/ 反查一条表情消息的上下文。
+ *
+ * @param msgId 消息 ID
+ * @param session 会话标识
+ * @param windowSize 前后各取多少条（默认 3）
+ * @returns 上下文消息列表（不含自己），按时间排序
+ */
+export function getStickerContext(
+  msgId: number,
+  session: string,
+  windowSize = 3,
+  options?: { rawDir?: string },
+): { time: number; nickname: string; text: string }[] {
+  const rawDir = options?.rawDir || RAW_DIR;
+  const rawPath = join(rawDir, `${session}.jsonl`);
+  if (!existsSync(rawPath)) return [];
+
+  const lines = readFileSync(rawPath, "utf8").trim().split("\n").filter(Boolean);
+  const entries: RawEntry[] = lines.map((l) => JSON.parse(l) as RawEntry);
+  entries.sort((a, b) => a.time - b.time);
+
+  const idx = entries.findIndex((e) => e.msgId === msgId);
+  if (idx === -1) return [];
+
+  const start = Math.max(0, idx - windowSize);
+  const end = Math.min(entries.length, idx + windowSize + 1);
+
+  return entries.slice(start, end)
+    .filter((c) => c.msgId !== msgId)
+    .map((c) => ({
+      time: c.time,
+      nickname: c.nickname,
+      text: c.text.slice(0, 200),
+    }));
 }
 
 function main(): void {
@@ -199,7 +207,6 @@ function main(): void {
     }
   }
 
-  // 汇总
   const stickerFiles = existsSync(STICKERS_DIR)
     ? readdirSync(STICKERS_DIR).filter((f) => f.endsWith(".jsonl"))
     : [];
