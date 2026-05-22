@@ -30,6 +30,7 @@ import {
   getSystemPrompt,
   getScenarioPrompt,
   getReplyRules,
+  getVisionFormat,
   clearPromptCaches,
 } from "./prompts";
 
@@ -476,7 +477,7 @@ function connect(): void {
     const scenarioKey = isPrivate ? "private" : decision.reason;
     let roleInstruction = `【${getScenarioPrompt(scenarioKey, BOT_NAME)}】`;
     if (imageDescription) {
-      roleInstruction = `【消息中包含一张图片，描述如下：${imageDescription}。回复时可以结合图片内容。】`;
+      roleInstruction = `【${getVisionFormat().replace("{IMAGE_DESCRIPTION}", imageDescription)}】`;
     }
 
     const senderName = entry.card || entry.nickname;

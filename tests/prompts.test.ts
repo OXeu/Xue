@@ -40,10 +40,15 @@ test("getReplyRules() 返回 reply.md 的完整内容", () => {
   expect(content).toContain("不要 formal");
 });
 
-test("getVisionFormat() 返回 vision.md 的完整内容", () => {
+test("getVisionFormat() 返回可替换 {IMAGE_DESCRIPTION} 的模板", () => {
   const content = getVisionFormat();
   expect(content).toContain("{IMAGE_DESCRIPTION}");
-  expect(content).toContain("图片");
+  // 应可直接用作 prompt 片段（不含文档标题）
+  expect(content).not.toContain("#");
+  // 替换占位符后应为有效的指令
+  const filled = content.replace("{IMAGE_DESCRIPTION}", "一张猫的图片");
+  expect(filled).toContain("一张猫的图片");
+  expect(filled).toContain("回复时可以结合图片内容");
 });
 
 // ── 场景提取 ────────────────────────────────────────────
