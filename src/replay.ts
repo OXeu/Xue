@@ -406,7 +406,7 @@ function roleInstruction(reason: string): string {
 
 // ── 快速沉默决策 ─────────────────────────────────────
 
-async function quickDecideSilence(
+export async function quickDecideSilence(
   contextText: string,
   senderName: string,
   messageText: string,

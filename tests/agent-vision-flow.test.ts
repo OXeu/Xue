@@ -1318,6 +1318,150 @@ describe("low-certainty silence check visual branch", () => {
   });
 });
 
+// ── quickDecideSilence 端到端 mock 测试 ─────────────────
+
+describe("quickDecideSilence end-to-end (agent.ts)", () => {
+  let quickDecideSilence: (
+    contextText: string, senderName: string, messageText: string,
+    scenarioKey: string, topicSummary: string, atmosphereTag: string,
+  ) => Promise<string | null>;
+
+  beforeAll(async () => {
+    const mod = await import("../src/agent");
+    quickDecideSilence = mod.quickDecideSilence;
+  });
+
+  /** 模拟 LLM 回复。依据 mockResponse 的内容，validateBody 可选验证请求体。 */
+  function mockLlm(response: string): void {
+    globalThis.fetch = ((url: string | URL | Request, ...args: any[]): Promise<Response> => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+      // 拦截所有 /chat/completions 调用
+      if (urlStr.includes("/chat/completions")) {
+        return Promise.resolve(new Response(
+          JSON.stringify({ choices: [{ message: { content: response } }] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ));
+      }
+      return Promise.resolve(new Response("", { status: 404 }));
+    }) as typeof globalThis.fetch;
+  }
+
+  const dummyContext = "[12:00] Alice: 大家好\n[12:01] Bob: 今天天气不错";
+  const dummySender = "Charlie";
+  const dummySummary = "当前话题：天气";
+  const dummyAtmosphere = "气氛：正常";
+  const imageDesc = "（图片描述：A photo of a white cat sleeping on a red sofa, relaxed atmosphere.）";
+
+  // ── Test 1: LLM 返回 SILENT ──────────────────────────
+
+  test("有图片描述 + LLM 返回 SILENT → 函数返回 'SILENT'", async () => {
+    mockLlm("SILENT");
+
+    const result = await quickDecideSilence(
+      dummyContext, dummySender, imageDesc, "random", dummySummary, dummyAtmosphere,
+    );
+
+    expect(result?.toUpperCase()).toBe("SILENT");
+    // 确认不是其他文字
+    expect(result).toBe("SILENT");
+  });
+
+  // ── Test 2: LLM 返回非 SILENT ────────────────────────
+
+  test("有图片描述 + LLM 返回回复 → 函数返回该回复文本", async () => {
+    mockLlm("好可爱的猫，想摸摸");
+
+    const result = await quickDecideSilence(
+      dummyContext, dummySender, imageDesc, "bystander", dummySummary, dummyAtmosphere,
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.toUpperCase()).not.toBe("SILENT");
+    expect(result).toBe("好可爱的猫，想摸摸");
+  });
+
+  // ── Test 3: 无图片（仅文本）→ 原有行为不变 ─────────
+
+  test("无图片描述（纯文本）+ LLM 返回 SILENT → 函数返回 'SILENT'", async () => {
+    mockLlm("SILENT");
+
+    const result = await quickDecideSilence(
+      dummyContext, dummySender, "晚上吃啥", "random", dummySummary, dummyAtmosphere,
+    );
+
+    expect(result).toBe("SILENT");
+  });
+
+  // ── Test 4: 图片下载失败（无描述）→ 退化为原有行为 ─
+
+  test("图片下载失败（无描述）+ LLM 返回 SILENT → 函数返回 'SILENT'", async () => {
+    mockLlm("SILENT");
+
+    // 模拟图片下载失败：messageText 不带（图片描述：...）后缀
+    const noDescriptionText = "看看这个";
+    const result = await quickDecideSilence(
+      dummyContext, dummySender, noDescriptionText, "media", dummySummary, dummyAtmosphere,
+    );
+
+    expect(result).toBe("SILENT");
+  });
+
+  // ── Test 5: 验证请求体包含图片描述 ─────────────────
+
+  test("传入图片描述时请求体中包含描述文本", async () => {
+    let capturedBody: string | null = null;
+
+    globalThis.fetch = ((url: string | URL | Request, ...args: any[]): Promise<Response> => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+      if (urlStr.includes("/chat/completions")) {
+        const opts = args[0] as RequestInit | undefined;
+        capturedBody = typeof opts?.body === "string" ? opts.body : null;
+        return Promise.resolve(new Response(
+          JSON.stringify({ choices: [{ message: { content: "SILENT" } }] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ));
+      }
+      return Promise.resolve(new Response("", { status: 404 }));
+    }) as typeof globalThis.fetch;
+
+    await quickDecideSilence(
+      dummyContext, dummySender, imageDesc, "random", dummySummary, dummyAtmosphere,
+    );
+
+    // 验证请求体包含了图片描述
+    expect(capturedBody).not.toBeNull();
+    const body = JSON.parse(capturedBody!);
+    const userMessage = body.messages.find((m: any) => m.role === "user");
+    expect(userMessage).toBeDefined();
+    // userMessage 的 content 是由 getSilenceCheckPrompt 构造的，
+    // 应包含传入的 messageText（带图片描述）
+    expect(userMessage.content).toContain(imageDesc);
+    expect(userMessage.content).toContain("white cat sleeping");
+    expect(userMessage.content).toContain("relaxed atmosphere");
+  });
+
+  // ── Test 6: LLM 返回 null/failure 时函数返回 null ───
+
+  test("LLM HTTP 错误 → 函数返回 null", async () => {
+    globalThis.fetch = ((url: string | URL | Request, ...args: any[]): Promise<Response> => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+      if (urlStr.includes("/chat/completions")) {
+        return Promise.resolve(new Response(
+          JSON.stringify({ error: "rate limit" }),
+          { status: 429, headers: { "content-type": "application/json" } },
+        ));
+      }
+      return Promise.resolve(new Response("", { status: 404 }));
+    }) as typeof globalThis.fetch;
+
+    const result = await quickDecideSilence(
+      dummyContext, dummySender, imageDesc, "random", dummySummary, dummyAtmosphere,
+    );
+
+    expect(result).toBeNull();
+  });
+});
+
 // ── analyzeAtmosphere ──────────────────────────────────
 
 describe("analyzeAtmosphere", () => {

@@ -645,7 +645,7 @@ function sendGroupMsg(ws: WebSocket, groupId: number, message: string): void {
 
 /** 对低确定性触发（random/bystander/media），先问模型有没有话想说。
  *  返回 SILENT 或模型生成的简短回复。 */
-async function quickDecideSilence(
+export async function quickDecideSilence(
   contextText: string,
   senderName: string,
   messageText: string,
