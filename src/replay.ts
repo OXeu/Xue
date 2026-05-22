@@ -748,7 +748,7 @@ async function main(): Promise<void> {
               );
             } catch {}
             if (VISION_MODEL) {
-              const answer = await describeImageFromBase64("简要描述这张图片的内容", downloaded.base64, downloaded.mime);
+              const answer = await describeImageFromBase64("用一条简短的自然语句描述这张图片的核心内容：主体是什么、情绪或氛围如何、是否包含文字。不要模板化的描述。", downloaded.base64, downloaded.mime);
               if (answer && !isVagueDescription(answer)) {
                 imageDesc = answer;
                 persistBestDescription(_inferencesDir, SESSION, e.msgId, phash, imageDesc);
