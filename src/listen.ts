@@ -5,10 +5,12 @@
  * 用于后续分析群聊风格基线。
  *
  * 用法:  ONEBOT_WS_URL=ws://localhost:6700 bun run src/listen.ts
+ *        DURATION_SECONDS=300 bun run src/listen.ts   # 5 分钟后自动退出
  *
  * 环境变量:
  *   ONEBOT_WS_URL        OneBot 网关地址（默认 ws://localhost:6700）
  *   ONEBOT_ACCESS_TOKEN  可选鉴权 token
+ *   DURATION_SECONDS     运行指定秒数后自动退出（不设则持续运行）
  */
 
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
@@ -279,6 +281,21 @@ function main(): void {
   console.log(`[${ts()}] data dir: ${DATA_DIR}`);
 
   connect(wsUrl, accessToken);
+
+  // 支持 DURATION_SECONDS 自动退出
+  const duration = process.env.DURATION_SECONDS;
+  if (duration) {
+    const secs = Number(duration);
+    if (Number.isFinite(secs) && secs > 0) {
+      console.log(`[${ts()}] will auto-exit after ${secs}s`);
+      setTimeout(() => {
+        console.log(`[${ts()}] DURATION_SECONDS reached, shutting down ...`);
+        if (ws) { try { ws.close(); } catch {} }
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        process.exit(0);
+      }, secs * 1000);
+    }
+  }
 
   // 保持进程运行
   process.on("SIGINT", () => {
