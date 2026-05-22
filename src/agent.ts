@@ -266,14 +266,63 @@ async function describeImage(
 
 // ── 上下文 ──────────────────────────────────────────────
 
-/** 从历史消息中提取群聊特征词。读取最近 200 条消息，返回高频关键词概览。 */
+/** 从历史消息中提取群聊特征词和风格特征。读取最近 200 条消息。 */
 export function buildSessionProfile(sessionId: string): string {
-  if (sessionId.startsWith("private_")) return ""; // 私聊不做群特征提取
+  if (sessionId.startsWith("private_")) return "";
   const entries = loadRecentMessages(sessionId, 200);
-  if (entries.length < 10) return ""; // 数据太少，没有足够信息量
+  if (entries.length < 10) return "";
   const keywords = extractKeywords(entries, 10);
-  if (keywords.length === 0) return "";
-  return `群聊特征：${keywords.join("、")}`;
+  const lines: string[] = [];
+  if (keywords.length > 0) lines.push(`群聊特征：${keywords.join("、")}`);
+  const style = analyzeStyle(entries);
+  if (style) lines.push(style);
+  return lines.join("\n");
+}
+
+/**
+ * 分析消息历史中的说话风格特征。
+ *
+ * 阈值说明（基于 style-report 中真人基线校准）：
+ * - 短句（≤15 字）：真人 30~50%。>60% 短平快消息为主（群聊常态）；
+ *   30~60% 适中；<30% 偏少（群内长文讨论多）。
+ * - 问句（以？结尾或含吗/呢/么/吧）：>30% 偏多，15~30% 适中，<15% 偏少。
+ * - 语气词（哈/嘛/嗯/哦/草/靠/淦 等）：>0.3 次/条 偏多，0.1~0.3 适中，
+ *   <0.1 偏少（偏严肃群聊）。
+ */
+function analyzeStyle(entries: ListenEntry[]): string {
+  if (entries.length < 10) return "";
+
+  let shortCount = 0;
+  let questionCount = 0;
+  let toneCount = 0;
+  let totalMessages = 0;
+
+  const toneRe = /[哈嘛嗯哦哟草靠淦]/g;
+
+  for (const e of entries) {
+    const text = stripCqCodes(e.text).trim();
+    if (!text) continue;
+    totalMessages++;
+    if (text.length <= 15) shortCount++;
+    if (text.includes("？") || text.endsWith("?") || /[吗呢么吧]/.test(text)) {
+      questionCount++;
+    }
+    const match = text.match(toneRe);
+    if (match) toneCount += match.length;
+  }
+
+  if (totalMessages === 0) return "";
+
+  const shortRatio = shortCount / totalMessages;
+  const questionRatio = questionCount / totalMessages;
+  const tonePerMsg = toneCount / totalMessages;
+
+  // 阈值：短句 60%/30%，问句 30%/15%，语气词 0.3/0.1
+  const shortLabel = shortRatio > 0.6 ? "短句偏多" : shortRatio > 0.3 ? "短句适中" : "短句偏少";
+  const questionLabel = questionRatio > 0.3 ? "问句偏多" : questionRatio > 0.15 ? "问句适中" : "问句偏少";
+  const toneLabel = tonePerMsg > 0.3 ? "语气词偏多" : tonePerMsg > 0.1 ? "语气词适中" : "语气词偏少";
+
+  return `风格：${shortLabel} | ${toneLabel} | ${questionLabel}`;
 }
 
 function loadRecentMessages(sessionId: string, limit: number): ListenEntry[] {

@@ -144,7 +144,7 @@ test("所有消息内容相同时仍能提取出关键词", () => {
   }
 });
 
-test("消息仅含停用词时返回空字符串", () => {
+test("消息仅含停用词时返回风格行但无关键词行", () => {
   const session = "test_profile_stopwords";
   cleanFile(session);
 
@@ -153,7 +153,9 @@ test("消息仅含停用词时返回空字符串", () => {
     writeLines(session, msgs);
 
     const result = buildSessionProfile(session);
-    expect(result).toBe("");
+    // 关键词行为空（全是停用词），但风格行仍然存在
+    expect(result).not.toContain("群聊特征");
+    expect(result).toContain("风格：");
   } finally {
     cleanFile(session);
   }

@@ -157,8 +157,34 @@ function buildSessionProfile(sessionId: string): string {
   const entries = loadRecentMessages(sessionId, 200);
   if (entries.length < 10) return "";
   const keywords = extractKeywords(entries, 10);
-  if (keywords.length === 0) return "";
-  return `群聊特征：${keywords.join("、")}`;
+  const lines: string[] = [];
+  if (keywords.length > 0) lines.push(`群聊特征：${keywords.join("、")}`);
+  const style = analyzeStyle(entries);
+  if (style) lines.push(style);
+  return lines.join("\n");
+}
+
+function analyzeStyle(entries: ListenEntry[]): string {
+  if (entries.length < 10) return "";
+  let shortCount = 0, questionCount = 0, toneCount = 0, totalMessages = 0;
+  const toneRe = /[哈嘛嗯哦哟草靠淦]/g;
+  for (const e of entries) {
+    const text = stripCqCodes(e.text).trim();
+    if (!text) continue;
+    totalMessages++;
+    if (text.length <= 15) shortCount++;
+    if (text.includes("？") || text.endsWith("?") || /[吗呢么吧]/.test(text)) questionCount++;
+    const m = text.match(toneRe);
+    if (m) toneCount += m.length;
+  }
+  if (totalMessages === 0) return "";
+  const shortRatio = shortCount / totalMessages;
+  const questionRatio = questionCount / totalMessages;
+  const tonePerMsg = toneCount / totalMessages;
+  const shortLabel = shortRatio > 0.6 ? "短句偏多" : shortRatio > 0.3 ? "短句适中" : "短句偏少";
+  const questionLabel = questionRatio > 0.3 ? "问句偏多" : questionRatio > 0.15 ? "问句适中" : "问句偏少";
+  const toneLabel = tonePerMsg > 0.3 ? "语气词偏多" : tonePerMsg > 0.1 ? "语气词适中" : "语气词偏少";
+  return `风格：${shortLabel} | ${toneLabel} | ${questionLabel}`;
 }
 
 // ── 主流程 ──────────────────────────────────────────────
