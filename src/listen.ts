@@ -95,8 +95,9 @@ function sessionLogPath(sessionId: string): string {
 /**
  * 解析 OneBot message 字段。
  * 兼容 array 格式和 string 格式。
+ * 导出供单元测试使用。
  */
-function parseMessage(message: string | unknown[]): {
+export function parseMessage(message: string | unknown[]): {
   text: string;
   atUsers: number[];
   replyTo?: number;
@@ -152,8 +153,9 @@ function parseMessage(message: string | unknown[]): {
   return result;
 }
 
-/** 估算消息的"类型"：纯文本、表情为主、图片为主、混合。 */
-function estimateMsgType(segmentTypes: string[], text: string): string {
+/** 估算消息的"类型"：纯文本、表情为主、图片为主、混合。
+ *  导出供单元测试使用。 */
+export function estimateMsgType(segmentTypes: string[], text: string): string {
   if (segmentTypes.length === 0) return "unknown";
   if (segmentTypes.every((t) => t === "text")) return "text";
   if (segmentTypes.length === 1 && segmentTypes[0] === "face") return "face";
@@ -334,4 +336,6 @@ function main(): void {
   });
 }
 
-main();
+if (!process.env.RIN_TEST) {
+  main();
+}
