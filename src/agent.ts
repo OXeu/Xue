@@ -32,6 +32,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, write
 import { join, resolve } from "node:path";
 import { computeDHash } from "./phash";
 import { cleanVisionDescription } from "./clean-vision";
+import { downloadImage } from "./image-download";
 
 import {
   getSystemPrompt,
@@ -232,19 +233,6 @@ function parseFirstImageUrl(raw: string): string | null {
   if (!m) return null;
   const urlMatch = m[1].match(/url=([^,]*)/);
   return urlMatch ? decodeURIComponent(urlMatch[1]) : null;
-}
-
-/** 下载图片并 base64 编码 */
-async function downloadImage(url: string): Promise<{ base64: string; mime: string } | null> {
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-    if (!res.ok) return null;
-    const buf = await res.arrayBuffer();
-    const mime = res.headers.get("content-type") || "image/jpeg";
-    return { base64: Buffer.from(buf).toString("base64"), mime };
-  } catch {
-    return null;
-  }
 }
 
 // cleanVisionDescription 已通过 import 导入（实现在 clean-vision.ts）

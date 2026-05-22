@@ -28,6 +28,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join, resolve } from "node:path";
 import { computeDHash } from "./phash";
 import { cleanVisionDescription } from "./clean-vision";
+import { downloadImage } from "./image-download";
 import {
   getSystemPrompt,
   getScenarioPrompt,
@@ -459,19 +460,6 @@ export async function quickDecideSilence(
 }
 
 // ── 图片描述 ────────────────────────────────────────────
-
-/** 下载图片并 base64 编码 */
-async function downloadImage(url: string): Promise<{ base64: string; mime: string } | null> {
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-    if (!res.ok) return null;
-    const buf = await res.arrayBuffer();
-    const mime = res.headers.get("content-type") || "image/jpeg";
-    return { base64: Buffer.from(buf).toString("base64"), mime };
-  } catch {
-    return null;
-  }
-}
 
 /** 如果图片是 GIF 格式，用 sharp 转为 JPEG（第一帧）。Gemma4 等模型不支持 GIF。 */
 async function gifToJpeg(base64: string, mime: string): Promise<{ base64: string; mime: string }> {
