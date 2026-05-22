@@ -57,7 +57,23 @@ export interface InferenceEntry {
 
 // ── 持久化 ──────────────────────────────────────────────
 
+let _stickersDir = STICKERS_DIR;
+let _rawDir = RAW_DIR;
 let _inferencesDir = INFERENCES_DIR;
+
+/** 重设 stickers 索引目录（供测试使用）。返回旧目录以便恢复。 */
+export function setStickersDir(dir: string): string {
+  const old = _stickersDir;
+  _stickersDir = dir;
+  return old;
+}
+
+/** 重设 raw 目录（供测试使用）。返回旧目录以便恢复。 */
+export function setRawDir(dir: string): string {
+  const old = _rawDir;
+  _rawDir = dir;
+  return old;
+}
 
 /** 重设推理结果目录（供测试使用）。返回旧目录以便恢复。 */
 export function setInferencesDir(dir: string): string {
@@ -203,8 +219,9 @@ function formatContext(
   return ctx.map((c) => `${c.nickname}: ${c.text}`).join("\n");
 }
 
-async function processSession(session: string): Promise<void> {
-  const stickerPath = join(STICKERS_DIR, `${session}.jsonl`);
+/** 处理单个会话的 sticker 索引：读取、推理、持久化。导出以供测试直接调用。 */
+export async function processSession(session: string): Promise<void> {
+  const stickerPath = join(_stickersDir, `${session}.jsonl`);
   if (!existsSync(stickerPath)) return;
 
   const lines = readFileSync(stickerPath, "utf8").trim().split("\n").filter(Boolean);
@@ -225,7 +242,7 @@ async function processSession(session: string): Promise<void> {
 
     total++;
 
-    const ctx = getStickerContext(sticker.msgId, sticker.session, 3, { rawDir: RAW_DIR });
+    const ctx = getStickerContext(sticker.msgId, sticker.session, 3, { rawDir: _rawDir });
     const sender = sticker.card || sticker.nickname;
 
     console.log(`\n--- [${total}] ${sticker.session} ---`);
@@ -272,7 +289,7 @@ async function processSession(session: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  if (!existsSync(STICKERS_DIR)) {
+  if (!existsSync(_stickersDir)) {
     console.log("data/stickers/ does not exist. Run 'bun run index-stickers' first.");
     process.exit(1);
   }
@@ -280,7 +297,7 @@ async function main(): Promise<void> {
   ensureInferencesDir();
 
   const target = process.env.SESSION;
-  const allFiles = readdirSync(STICKERS_DIR).filter((f) => f.endsWith(".jsonl"));
+  const allFiles = readdirSync(_stickersDir).filter((f) => f.endsWith(".jsonl"));
 
   const sessions = target
     ? allFiles.filter((f) => f === `${target}.jsonl`)

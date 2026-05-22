@@ -6,11 +6,18 @@
  * 测试在临时目录中运行，完成后清理。
  */
 
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { setInferencesDir, loadInferredIds, saveInference } from "../src/infer-stickers";
+import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
+import {
+  setInferencesDir,
+  setStickersDir,
+  setRawDir,
+  loadInferredIds,
+  saveInference,
+  processSession,
+} from "../src/infer-stickers";
 import type { InferenceEntry } from "../src/infer-stickers";
-import { existsSync, mkdirSync, rmSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { resolve, join } from "node:path";
 
 const TMP_DIR = resolve(import.meta.dirname, "../.test-infer-" + Date.now());
 let oldDir: string;
@@ -203,5 +210,264 @@ describe("infer-stickers persistence", () => {
     expect(ids.has(80001)).toBeTrue();
     expect(ids.has(80002)).toBeTrue();
     expect(ids.size).toBe(2); // 损坏行被静默跳过
+  });
+});
+
+// ── 主流程集成测试 ──────────────────────────────────────
+
+describe("infer-stickers main flow integration", () => {
+  const TMP_ROOT = resolve(import.meta.dirname, "../.test-infer-flow-" + Date.now());
+  const stickersDir = join(TMP_ROOT, "stickers");
+  const rawDir = join(TMP_ROOT, "raw");
+  const inferencesDir = join(TMP_ROOT, "inferences");
+
+  let oldStickersDir: string;
+  let oldRawDir: string;
+  let oldInferencesDir: string;
+  let originalFetch: typeof globalThis.fetch;
+
+  /** 创建临时 sticker 索引文件 */
+  function createStickerIndex(session: string, entries: object[]): void {
+    const content = entries.map((e) => JSON.stringify(e)).join("\n") + "\n";
+    writeFileSync(join(stickersDir, `${session}.jsonl`), content, "utf8");
+  }
+
+  /** 创建临时 raw 文件（提供上下文） */
+  function createRawFile(session: string, entries: object[]): void {
+    const content = entries.map((e) => JSON.stringify(e)).join("\n") + "\n";
+    writeFileSync(join(rawDir, `${session}.jsonl`), content, "utf8");
+  }
+
+  beforeAll(() => {
+    // 创建临时目录
+    for (const d of [stickersDir, rawDir, inferencesDir]) {
+      mkdirSync(d, { recursive: true });
+    }
+
+    // 重定向模块路径
+    oldStickersDir = setStickersDir(stickersDir);
+    oldRawDir = setRawDir(rawDir);
+    oldInferencesDir = setInferencesDir(inferencesDir);
+
+    // 保存原始 fetch
+    originalFetch = globalThis.fetch;
+  });
+
+  afterAll(() => {
+    // 恢复路径
+    setStickersDir(oldStickersDir);
+    setRawDir(oldRawDir);
+    setInferencesDir(oldInferencesDir);
+
+    // 恢复 fetch
+    globalThis.fetch = originalFetch;
+
+    // 清理临时目录
+    try { rmSync(TMP_ROOT, { recursive: true, force: true }); } catch {}
+  });
+
+  beforeEach(() => {
+    // 重置 mock fetch — 默认返回 404 以触发 picsum fallback
+    let callCount = 0;
+    globalThis.fetch = ((url: string | URL | Request, ...args: any[]): Promise<Response> => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+
+      // 图片下载请求（picsum fallback）
+      if (urlStr.includes("picsum.photos")) {
+        const fakeImageBytes = Buffer.from("fake-jpeg-data");
+        return Promise.resolve(new Response(fakeImageBytes, {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        }));
+      }
+
+      // 视觉模型 API 请求
+      if (urlStr.includes("/v1/chat/completions")) {
+        callCount++;
+        const responseText = callCount === 1
+          ? "A funny reaction meme expressing amusement."
+          : "A shocked surprised face meme.";
+        return Promise.resolve(new Response(JSON.stringify({
+          choices: [{ message: { content: responseText } }],
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }));
+      }
+
+      // 其余（如原始 CDN URL）→ 失败，触发 fallback
+      return Promise.resolve(new Response(null, { status: 403 }));
+    }) as typeof globalThis.fetch;
+  });
+
+  test("完整流程：读取 sticker 索引 → 调用视觉模型 → 持久化推理结果", async () => {
+    // 准备 sticker 索引 — 1 条图片消息
+    createStickerIndex("flow_test", [
+      {
+        msgId: 90001, time: 1716000000, session: "flow_test",
+        userId: 200001, nickname: "TestUser", card: undefined,
+        type: "image", content: "https://multimedia.example.com/img.jpg", text: "",
+      },
+    ]);
+
+    // 准备 raw 文件（提供上下文）
+    createRawFile("flow_test", [
+      { msgId: 89999, time: 1715999990, userId: 200000, nickname: "UserX", text: "hello" },
+      { msgId: 90000, time: 1715999995, userId: 200000, nickname: "UserX", text: "check this" },
+      { msgId: 90001, time: 1716000000, userId: 200001, nickname: "TestUser", text: "" },
+      { msgId: 90002, time: 1716000005, userId: 200002, nickname: "UserY", text: "nice" },
+    ]);
+
+    // 执行
+    await processSession("flow_test");
+
+    // 验证：inference 文件已创建
+    const infPath = join(inferencesDir, "flow_test.jsonl");
+    expect(existsSync(infPath)).toBeTrue();
+
+    const lines = readFileSync(infPath, "utf8").trim().split("\n").filter(Boolean);
+    expect(lines.length).toBe(1);
+
+    const entry = JSON.parse(lines[0]) as InferenceEntry;
+    expect(entry.msgId).toBe(90001);
+    expect(entry.session).toBe("flow_test");
+    expect(entry.nickname).toBe("TestUser");
+    expect(entry.inference).toBe("A funny reaction meme expressing amusement.");
+    // context 应包含前后各 3 条（实际 raw 中 90001 前后共 4 条，但 getStickerContext 截 3）
+    expect(entry.context.length).toBeGreaterThanOrEqual(1);
+    expect(entry.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  test("重复运行跳过已推理的条目", async () => {
+    // flow_test 已有 1 条推理结果
+    // 再次运行
+    const consoleOutput: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: unknown[]) => { consoleOutput.push(args.join(" ")); };
+
+    try {
+      await processSession("flow_test");
+    } finally {
+      console.log = origLog;
+    }
+
+    // verify: inference 文件只有 1 行（未新增）
+    const infPath = join(inferencesDir, "flow_test.jsonl");
+    const lines = readFileSync(infPath, "utf8").trim().split("\n").filter(Boolean);
+    expect(lines.length).toBe(1); // 仍是之前那一条
+  });
+
+  test("多条目处理：多条 sticker 依次推理并持久化", async () => {
+    const session = "multi_flow";
+
+    createStickerIndex(session, [
+      {
+        msgId: 91001, time: 1716100000, session,
+        userId: 201001, nickname: "UserA", card: undefined,
+        type: "image", content: "https://multimedia.example.com/a.jpg", text: "",
+      },
+      {
+        msgId: 91002, time: 1716100010, session,
+        userId: 201002, nickname: "UserB", card: undefined,
+        type: "image", content: "https://multimedia.example.com/b.jpg", text: "",
+      },
+    ]);
+
+    createRawFile(session, [
+      { msgId: 91000, time: 1716099990, userId: 201000, nickname: "UserX", text: "earlier msg" },
+      { msgId: 91001, time: 1716100000, userId: 201001, nickname: "UserA", text: "" },
+      { msgId: 91002, time: 1716100010, userId: 201002, nickname: "UserB", text: "" },
+      { msgId: 91003, time: 1716100020, userId: 201000, nickname: "UserX", text: "later msg" },
+    ]);
+
+    await processSession(session);
+
+    const infPath = join(inferencesDir, `${session}.jsonl`);
+    const lines = readFileSync(infPath, "utf8").trim().split("\n").filter(Boolean);
+    expect(lines.length).toBe(2);
+
+    const entries = lines.map((l) => JSON.parse(l) as InferenceEntry);
+    expect(entries[0].msgId).toBe(91001);
+    expect(entries[1].msgId).toBe(91002);
+    expect(entries[0].inference).toBe("A funny reaction meme expressing amusement.");
+    expect(entries[1].inference).toBe("A shocked surprised face meme.");
+  });
+
+  test("重复运行多条目：第一条已推理，跳过，只处理未推理的", async () => {
+    const session = "partial_skip";
+
+    // 在 processSession 之前手动写一条推理结果（模拟历史）
+    saveInference(makeEntry({
+      msgId: 92001, session, inference: "Existing inference.",
+    }));
+
+    createStickerIndex(session, [
+      {
+        msgId: 92001, time: 1716200000, session,
+        userId: 202001, nickname: "OldUser", card: undefined,
+        type: "image", content: "https://example.com/old.jpg", text: "",
+      },
+      {
+        msgId: 92002, time: 1716200010, session,
+        userId: 202002, nickname: "NewUser", card: undefined,
+        type: "image", content: "https://example.com/new.jpg", text: "",
+      },
+    ]);
+
+    createRawFile(session, [
+      { msgId: 92001, time: 1716200000, userId: 202001, nickname: "OldUser", text: "" },
+      { msgId: 92002, time: 1716200010, userId: 202002, nickname: "NewUser", text: "" },
+    ]);
+
+    // 首次运行：1 条已跳过，1 条新推理
+    await processSession(session);
+
+    const infPath = join(inferencesDir, `${session}.jsonl`);
+    const lines = readFileSync(infPath, "utf8").trim().split("\n").filter(Boolean);
+    expect(lines.length).toBe(2); // 现有 1 条 + 新推理 1 条
+
+    const entries = lines.map((l) => JSON.parse(l) as InferenceEntry);
+    const newEntry = entries.find((e) => e.msgId === 92002)!;
+    expect(newEntry.inference).toBe("A funny reaction meme expressing amusement.");
+    expect(entries.find((e) => e.msgId === 92001)!.inference).toBe("Existing inference.");
+  });
+
+  test("type 非 image 的条目被跳过，不触发推理", async () => {
+    const session = "skip_non_image";
+
+    createStickerIndex(session, [
+      {
+        msgId: 93001, time: 1716300000, session,
+        userId: 203001, nickname: "FaceUser", card: undefined,
+        type: "face", content: "123", text: "",
+      },
+      {
+        msgId: 93002, time: 1716300010, session,
+        userId: 203002, nickname: "ImageUser", card: undefined,
+        type: "image", content: "https://example.com/img.jpg", text: "",
+      },
+    ]);
+
+    createRawFile(session, [
+      { msgId: 93001, time: 1716300000, userId: 203001, nickname: "FaceUser", text: "" },
+      { msgId: 93002, time: 1716300010, userId: 203002, nickname: "ImageUser", text: "" },
+    ]);
+
+    await processSession(session);
+
+    const infPath = join(inferencesDir, `${session}.jsonl`);
+    const lines = readFileSync(infPath, "utf8").trim().split("\n").filter(Boolean);
+    expect(lines.length).toBe(1); // 只有 image 类型被推理
+    const entry = JSON.parse(lines[0]) as InferenceEntry;
+    expect(entry.msgId).toBe(93002);
+  });
+
+  test("session 文件夹不存在且无 sticker 索引时静默跳过", async () => {
+    // 调用不存在的 session，processSession 应直接 return
+    await processSession("nonexistent_session");
+
+    // 无文件被创建
+    const infPath = join(inferencesDir, "nonexistent_session.jsonl");
+    expect(existsSync(infPath)).toBeFalse();
   });
 });
