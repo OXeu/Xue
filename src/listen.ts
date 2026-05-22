@@ -20,6 +20,7 @@ interface OneBotSender {
   user_id: number;
   nickname: string;
   card?: string;
+  role?: string;
 }
 
 interface OneBotMsgEvent {
@@ -59,6 +60,12 @@ interface ListenEntry {
   nickname: string;
   /** 发送者群名片（如有）。 */
   card?: string;
+  /** 发送者群角色（owner / admin / member）。 */
+  senderRole?: string;
+  /** 消息子类型（friend / group / normal / anonymous 等）。 */
+  subType: string;
+  /** 收到此消息的 bot QQ。 */
+  selfId: number;
   /** @ 了哪些 QQ（数组）。 */
   atUsers: number[];
   /** 回复引用的消息 ID（如有）。 */
@@ -126,7 +133,7 @@ function parseMessage(message: string | unknown[]): {
           result.replyTo = Number(seg.data.id);
         }
         break;
-      // image / face / mface / … — 只记录类型，不提取内容
+      // image / face / forward / mface / … — 只记录类型，不提取内容
     }
   }
 
@@ -157,9 +164,33 @@ function ts(): string {
   return new Date().toISOString();
 }
 
-// ── 连接 ────────────────────────────────────────────────
+// ── 连接与重连 ──────────────────────────────────────────
+
+let ws: WebSocket | null = null;
+let reconnectDelay = 1_000;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleReconnect(wsUrl: string, accessToken: string): void {
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  const delay = reconnectDelay;
+  reconnectDelay = Math.min(delay * 2, 30_000);
+  console.log(`[${ts()}] reconnecting in ${delay}ms ...`);
+  reconnectTimer = setTimeout(() => connect(wsUrl, accessToken), delay);
+}
 
 function connect(wsUrl: string, accessToken: string): void {
+  // 清理旧连接及其监听器，避免嵌套重连
+  if (ws) {
+    try {
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.close();
+    } catch { /* ignore */ }
+    ws = null;
+  }
+
   // 将 token 注入 URL query 参数（OneBot 标准鉴权方式）
   const finalUrl = accessToken
     ? (() => {
@@ -171,10 +202,11 @@ function connect(wsUrl: string, accessToken: string): void {
 
   console.log(`[${ts()}] connecting to ${finalUrl} ...`);
 
-  const ws = new WebSocket(finalUrl);
+  ws = new WebSocket(finalUrl);
 
   ws.onopen = () => {
     console.log(`[${ts()}] connected to ${finalUrl}`);
+    reconnectDelay = 1_000; // 连接成功，重置退避
   };
 
   ws.onmessage = (event: MessageEvent) => {
@@ -186,7 +218,8 @@ function connect(wsUrl: string, accessToken: string): void {
     try {
       data = JSON.parse(raw) as OneBotMsgEvent;
     } catch {
-      return; // 非 JSON 帧（如心跳 pong），忽略
+      console.warn(`[${ts()}] failed to parse message: ${raw.slice(0, 200)}`);
+      return;
     }
 
     if (data.post_type !== "message") return;
@@ -205,6 +238,9 @@ function connect(wsUrl: string, accessToken: string): void {
       userId: data.user_id,
       nickname: data.sender.nickname,
       card: data.sender.card,
+      senderRole: data.sender.role,
+      subType: data.sub_type,
+      selfId: data.self_id,
       atUsers: parsed.atUsers,
       replyTo: parsed.replyTo,
       segmentTypes: parsed.segmentTypes,
@@ -222,8 +258,8 @@ function connect(wsUrl: string, accessToken: string): void {
 
   ws.onclose = () => {
     console.log(`[${ts()}] disconnected`);
-    // 断线后 3 秒重连
-    setTimeout(() => connect(wsUrl, accessToken), 3000);
+    // 指数退避重连（初始 1s，最大 30s）
+    scheduleReconnect(wsUrl, accessToken);
   };
 
   ws.onerror = () => {
@@ -247,10 +283,12 @@ function main(): void {
   // 保持进程运行
   process.on("SIGINT", () => {
     console.log(`\n[${ts()}] shutting down ...`);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
     process.exit(0);
   });
   process.on("SIGTERM", () => {
     console.log(`[${ts()}] shutting down ...`);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
     process.exit(0);
   });
 }
