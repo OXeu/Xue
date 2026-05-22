@@ -8,6 +8,7 @@
     "collect-baseline": "bun src/collect-baseline.ts",
     "analyze-baseline": "bun src/analyze-baseline.ts",
     "analyze-raw": "bun src/analyze-raw.ts",
+    "analyze-style": "bun src/analyze-style.ts",
     "listen": "bun src/listen.ts",
     "lint": "echo 'TODO'"
   },
