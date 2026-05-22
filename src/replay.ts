@@ -25,6 +25,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { cleanVisionDescription } from "./clean-vision";
 import { getCachedDescription, saveCachedImage } from "./image-cache";
+import {
+  getSystemPrompt,
+  getScenarioPrompt,
+  getReplyRules,
+  clearPromptCaches,
+} from "./prompts";
 
 // ── 配置 ────────────────────────────────────────────────
 
@@ -180,14 +186,9 @@ function roleInstruction(reason: string, imgDesc?: string): string {
   if (imgDesc) {
     return `【消息中包含一张图片，描述如下：${imgDesc}。回复时可以结合图片内容。】`;
   }
-  switch (reason) {
-    case "at-self": return `【消息是发给你的，你被直接 @ 了，请以 ${BOT_NAME} 的身份回应。】`;
-    case "at-all": return `【消息 @ 了全体成员，也包括你。请像普通群成员一样自然回应。】`;
-    case "mentioned": return `【消息中提到了你的名字（${BOT_NAME}），虽然没 @ 你，但你可以接话。】`;
-    case "bystander": return `【这条消息不是发给你的。你只是群里的旁观者，如果实在想说点什么可以接一句，但不要抢话。】`;
-    case "media": return `【这是一个表情/图片消息。你可以简单评价一下，也可以忽略。】`;
-    default: return `【你只是群里的普通成员，想回就回，不想回就不回。】`;
-  }
+  // 从 prompts/system.md 提取场景指令，找不到时 fallback 到 default
+  const prompt = getScenarioPrompt(reason, BOT_NAME);
+  return prompt ? `【${prompt}】` : `【${getScenarioPrompt("default", BOT_NAME)}】`;
 }
 
 // ── 图片描述 ────────────────────────────────────────────
@@ -397,8 +398,8 @@ async function main(): Promise<void> {
           {
             role: "system",
             content: [
-              `你叫${BOT_NAME}，是一个在 QQ 群里聊天的人类。`,
-              `回复要简短、自然，像真人。不要列点，不要 formal。`,
+              getSystemPrompt(BOT_NAME),
+              getReplyRules(),
               topicSummary,
               `\n下面是这个群最近的消息：`,
               roleInst,

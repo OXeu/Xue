@@ -26,6 +26,12 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { cleanVisionDescription } from "./clean-vision";
 import { saveCachedImage, getCachedDescription } from "./image-cache";
+import {
+  getSystemPrompt,
+  getScenarioPrompt,
+  getReplyRules,
+  clearPromptCaches,
+} from "./prompts";
 
 // ── 配置 ────────────────────────────────────────────────
 
@@ -467,23 +473,10 @@ function connect(): void {
       : "";
 
     // 决定角色定位
-    let roleInstruction: string;
-    if (isPrivate) {
-      roleInstruction = `【这是私聊消息，对方直接对你说的话。请以 ${BOT_NAME} 的身份自然回应。】`;
-    } else if (imageDescription) {
+    const scenarioKey = isPrivate ? "private" : decision.reason;
+    let roleInstruction = `【${getScenarioPrompt(scenarioKey, BOT_NAME)}】`;
+    if (imageDescription) {
       roleInstruction = `【消息中包含一张图片，描述如下：${imageDescription}。回复时可以结合图片内容。】`;
-    } else if (decision.reason === "at-self") {
-      roleInstruction = `【消息是发给你的，你被直接 @ 了，请以 ${BOT_NAME} 的身份回应。】`;
-    } else if (decision.reason === "at-all") {
-      roleInstruction = `【消息 @ 了全体成员，也包括你。请像普通群成员一样自然回应。】`;
-    } else if (decision.reason === "mentioned") {
-      roleInstruction = `【消息中提到了你的名字（${BOT_NAME}），虽然没 @ 你，但你可以接话。】`;
-    } else if (decision.reason === "bystander") {
-      roleInstruction = `【这条消息不是发给你的。你只是群里的旁观者，如果实在想说点什么可以接一句，但不要抢话。】`;
-    } else if (decision.reason === "media") {
-      roleInstruction = `【这是一个表情/图片消息。你看不到图片内容，不要假装看到了。根据上下文简单回一句即可。】`;
-    } else {
-      roleInstruction = `【你只是群里的普通成员，想回就回，不想回就不回。】`;
     }
 
     const senderName = entry.card || entry.nickname;
@@ -494,8 +487,8 @@ function connect(): void {
         {
           role: "system",
           content: [
-            `你叫${BOT_NAME}，是一个在 QQ 群里聊天的人类。`,
-            `回复要简短、自然，像真人。不要列点，不要 formal。`,
+            getSystemPrompt(BOT_NAME),
+            getReplyRules(),
             topicSummary,
             `\n下面是这个群最近的消息：`,
             roleInstruction,
