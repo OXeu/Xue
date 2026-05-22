@@ -191,6 +191,11 @@ function getReplyChanceForSession(sessionId: string): number {
 /** 临时图片缓存：pHash → base64 + mime。在单次 onmessage 调用期间有效。 */
 const _imageCache = new Map<string, { base64: string; mime: string }>();
 
+/** 跨消息的最近用户图片缓存：key = session:userId → 图片数据 + phash + 时间。
+ * 同一用户在 120 秒内先后发图+文字时，文字消息可复用其图片。 */
+const _recentUserImage = new Map<string, { downloaded: { base64: string; mime: string }; phash: string; time: number }>();
+const USER_IMAGE_TTL_MS = 120_000;
+
 /** 记录最后一次回复的目标用户，用于检测对话延续。 */
 let _lastBotReply: { userId: number; session: string; time: number } | null = null;
 const CONTINUATION_WINDOW_MS = 60_000; // 同一用户 60 秒内继续发消息视为对话延续
@@ -536,6 +541,16 @@ function connect(): void {
       }
     }
 
+    // 如果当前消息自身没有图片，检查同一用户最近是否发过图
+    const _recentUserKey = `${sessionId}:${userId}`;
+    let _recentUserCache: { downloaded: { base64: string; mime: string }; phash: string } | null = null;
+    if (!/\[CQ:image/.test(rawMessage)) {
+      const cached = _recentUserImage.get(_recentUserKey);
+      if (cached && Date.now() - cached.time < USER_IMAGE_TTL_MS) {
+        _recentUserCache = { downloaded: cached.downloaded, phash: cached.phash };
+      }
+    }
+
     // 解析 @ 列表和消息类型
     const atUsers = parseAtUsers(rawMessage);
     const msgType = estimateMsgType(rawMessage);
@@ -597,6 +612,7 @@ function connect(): void {
           if (downloaded) {
             const phash = await computeDHash(downloaded.base64, downloaded.mime);
             _imageCache.set(phash, downloaded);
+            _recentUserImage.set(_recentUserKey, { downloaded, phash, time: Date.now() });
             if (VISION_MODEL) {
               const answer = await callVision("用一条简短的自然语句描述这张图片的核心内容：主体是什么、情绪或氛围如何、是否包含文字。不要模板化的描述。", downloaded.base64, downloaded.mime);
               if (answer && !isVagueDescription(answer)) {
@@ -604,6 +620,14 @@ function connect(): void {
               }
             }
           }
+        }
+      }
+      // 当前消息无图但同一用户刚发过图 → 复用缓存图片描述
+      if (!imageDesc && _recentUserCache && VISION_MODEL) {
+        const answer = await callVision("用一条简短的自然语句描述这张图片的核心内容：主体是什么、情绪或氛围如何、是否包含文字。不要模板化的描述。", _recentUserCache.downloaded.base64, _recentUserCache.downloaded.mime);
+        if (answer && !isVagueDescription(answer)) {
+          imageDesc = answer;
+          log(`[user-image-cache] reused cached image phash=${_recentUserCache.phash}`);
         }
       }
 
@@ -642,7 +666,14 @@ function connect(): void {
       if (downloadedImg) {
         currentPhash = await computeDHash(downloadedImg.base64, downloadedImg.mime);
         _imageCache.set(currentPhash, downloadedImg);
+        _recentUserImage.set(_recentUserKey, { downloaded: downloadedImg, phash: currentPhash, time: Date.now() });
       }
+    } else if (_recentUserCache) {
+      // 当前消息无图，复用同一用户最近发的图
+      downloadedImg = _recentUserCache.downloaded;
+      currentPhash = _recentUserCache.phash;
+      _imageCache.set(currentPhash, downloadedImg);
+      log(`[user-image-cache] reused cached image phash=${currentPhash} for ${sessionId} userId=${userId}`);
     }
     const roleInstruction = `【${getScenarioPrompt(scenarioKey, BOT_NAME)}】`;
 
@@ -663,7 +694,9 @@ function connect(): void {
       }
 
       // 初始消息列表
-      const messageText = `${cleanText}`;
+      const messageText = currentPhash !== null && _recentUserCache !== null && !/\[CQ:image/.test(rawMessage)
+        ? `${cleanText}（之前发的图）`
+        : `${cleanText}`;
       const messages: any[] = [{
         role: "system",
         content: systemParts.filter(Boolean).join("\n"),
