@@ -76,6 +76,35 @@ Index 56 — 原始: * Input: An image showing a white bowl containing...
 
 注入 prompt 时不再出现 "Input:"、"Task:"、"Subject:" 等指令文本。
 
+## 重放稳定性
+
+引入图片缓存系统（`image-cache.ts`）后，重放管线端到端稳定：
+
+- 图片描述写入 `data/test-images/` 后不再变动
+- 每次重放相同会话和消息 ID 时返回完全一致的描述
+- LLM 回复基于确定的描述生成，不会因 picsum 随机图导致质量波动
+
+**两条验证 (索引 49, 50, 56)：**
+
+```
+Index 49 (Paul, 07:38:59)
+  缓存描述: A person in a white dress (or a woman in a white dress).
+  两次读取: ✅ 完全相同
+  LLM 回复: "哈哈，这白裙子有点灵异啊，是不是headless终于有身子了？"
+
+Index 50 (Paul, 07:39:00)
+  缓存描述: Yellow leaves (autumn leaves).
+  两次读取: ✅ 完全相同
+  LLM 回复: "哦，这叶子挺好看嘛，突然从供电门切换到秋景，画风转变也太大了hh"
+
+Index 56 (Paul, 07:43:21)
+  缓存描述: A prominent, pointed, snow-covered mountain peak.
+  两次读取: ✅ 完全相同（缓存命中）
+  LLM 回复: "这雪山图好漂亮啊，是实拍吗？"
+```
+
+**说明**: 由于历史消息的原始图片 URL 在 CQ 码剥离时已丢失，上述缓存来自 picsum 固定种子图片。真正的原始图片 URL 自 commit `88ca1c0` 起会被 listen.ts 保存到 JSONL，未来消息的回放将使用真实图片。
+
 ## 当前 agent 状态
 
 - **PID**: 1423307
