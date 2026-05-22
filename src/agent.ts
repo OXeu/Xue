@@ -546,6 +546,8 @@ function connect(): void {
       segmentTypes: [],
     };
 
+    log(`[msg-diagnose] session=${sessionId} userId=${userId} atSelf=${entry.atUsers.includes(BOT_QQ)} hasImage=${/\[CQ:image/.test(rawMessage)} hasFace=${/\[CQ:face/.test(rawMessage)} textLen=${cleanText.length} rawMsgLen=${rawMessage.length}`);
+
     // 决策是否回复（私聊必回但跳过自己的消息，群聊按原有逻辑）
     const decision = isPrivate
       ? { should: userId !== BOT_QQ, reason: "private" }
