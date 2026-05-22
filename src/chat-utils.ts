@@ -6,7 +6,7 @@
  * 视觉描述质量检查与持久化。
  *
  * 不包含存在行为差异或有深度模块级耦合的函数
- * （如 buildContext, callLlmWithTools, decideReply, loadPhashMap, loadCachedInference）。
+ * （如 buildContext, callLlmWithTools, decideReply）。
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -250,9 +250,6 @@ export function isVagueDescription(desc: string): boolean {
   return false;
 }
 
-/**
- * 持久化最佳视觉描述到 inference 文件。
- * 读取现有文件 → 过滤同 msgId 的旧 inference 行 → 追加新行 → 覆盖写回。
 // ── 快速沉默决策 ────────────────────────────────────
 
 /** 对低确定性触发（random/bystander/media），先问模型有没有话想说。
