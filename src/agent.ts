@@ -37,7 +37,7 @@ const BOT_QQ = Number(process.env.BOT_QQ || "3042160393");
 const REPLY_CHANCE = parseFloat(process.env.REPLY_CHANCE || "0.3");
 const DRY_RUN = process.env.DRY_RUN !== "false"; // 默认 true，仅模拟
 const MAX_CONTEXT = 30; // 加载最近 N 条消息作为上下文
-const VISION_MODEL = process.env.VISION_MODEL || "deepseek-v4-flash";
+const VISION_MODEL = process.env.VISION_MODEL || "";
 const VISION_BASE_URL = (process.env.VISION_BASE_URL || LLM_BASE_URL).replace(/\/+$/, "");
 
 const RAW_DIR = resolve(import.meta.dirname, "../data/raw");
@@ -173,6 +173,8 @@ async function downloadImage(url: string): Promise<{ base64: string; mime: strin
 
 /** 调用视觉 LLM 描述图片，返回一句话描述，失败返回 null */
 async function describeImage(cqMatch: string): Promise<string | null> {
+  if (!VISION_MODEL) return null;
+
   const url = parseFirstImageUrl(cqMatch);
   if (!url) return null;
 
@@ -495,7 +497,11 @@ function main(): void {
   }
 
   log(`dry-run=${DRY_RUN}（${DRY_RUN ? "仅模拟，不会实际发送消息" : "会实际发送消息到群聊"}）`);
-  log(`vision: ${VISION_MODEL} @ ${VISION_BASE_URL}`);
+  if (VISION_MODEL) {
+    log(`vision: ${VISION_MODEL} @ ${VISION_BASE_URL}`);
+  } else {
+    log("vision: disabled (no model configured)");
+  }
 
   connect();
 
