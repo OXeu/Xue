@@ -12,7 +12,14 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-const CACHE_DIR = resolve(import.meta.dirname, "../data/test-images");
+let CACHE_DIR = resolve(import.meta.dirname, "../data/test-images");
+
+/** 重设缓存目录（供测试使用）。返回旧目录以便恢复。 */
+export function setCacheDir(dir: string): string {
+  const old = CACHE_DIR;
+  CACHE_DIR = dir;
+  return old;
+}
 
 export interface CachedImage {
   description: string;
