@@ -78,6 +78,8 @@ interface ListenEntry {
   segmentTypes: string[];
   /** 图片 URL 列表（如有）。 */
   imageUrls?: string[];
+  /** 图片 pHash 值列表（与 imageUrls 一一对应），用于 replay 时查找本地缓存。 */
+  phash?: string[];
   /** 原始 CQ 码（未剥离的 raw_message 字段）。 */
   raw_message: string;
   /** 完整消息段数组（OneBot 数组格式，保留原始数据）。 */
@@ -196,19 +198,21 @@ function ts(): string {
 
 /** 下载图片到本地缓存（不阻塞消息处理），以 phash 为文件名。
  *  同一张图片无论出现在哪个消息中，只存一份（phash 去重）。
+ *  返回 phash（下载失败时返回 null）。
  *  导出供测试使用。 */
-export async function cacheEntryImage(url: string, _session: string, _msgId: number): Promise<void> {
+export async function cacheEntryImage(url: string, _session: string, _msgId: number): Promise<string | null> {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-    if (!res.ok) return;
+    if (!res.ok) return null;
     const buf = await res.arrayBuffer();
     const mime = res.headers.get("content-type") || "image/jpeg";
     const base64 = Buffer.from(buf).toString("base64");
     const phash = await computeDHash(base64, mime);
     saveCachedImage(phash, base64, mime);
     console.log(`[${ts()}] [cache] cached image phash=${phash}`);
+    return phash;
   } catch {
-    // 下载失败不阻塞消息处理
+    return null;
   }
 }
 
@@ -257,7 +261,7 @@ function connect(wsUrl: string, accessToken: string): void {
     reconnectDelay = 1_000; // 连接成功，重置退避
   };
 
-  ws.onmessage = (event: MessageEvent) => {
+  ws.onmessage = async (event: MessageEvent) => {
     const raw = typeof event.data === "string"
       ? event.data
       : Buffer.from(event.data).toString();
@@ -306,14 +310,17 @@ function connect(wsUrl: string, accessToken: string): void {
       `[${ts()}] [${sessionId}] <${entry.nickname}>${atInfo}${replyInfo}: ${entry.text.slice(0, 120)}`,
     );
 
-    writeEntry(entry);
-
-    // 非阻塞缓存图片
+    // 写入消息前先下载图片、计算 phash，存入 entry 供 replay 时定位本地缓存
     if (entry.imageUrls && entry.imageUrls.length > 0) {
+      const phashes: string[] = [];
       for (const url of entry.imageUrls) {
-        cacheEntryImage(url, entry.session, entry.msgId);
+        const phash = await cacheEntryImage(url, entry.session, entry.msgId);
+        if (phash) phashes.push(phash);
       }
+      if (phashes.length > 0) entry.phash = phashes;
     }
+
+    writeEntry(entry);
   };
 
   ws.onclose = (event: CloseEvent) => {
