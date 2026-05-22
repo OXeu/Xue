@@ -56,15 +56,12 @@ import {
   getSystemPrompt,
   getScenarioPrompt,
   getReplyRules,
-  getVisionFormat,
 } from "./prompts";
 import { stripCqCodes, parseAtUsers, hasAtAll, estimateMsgType } from "./cq-codes";
 import {
   extractKeywords,
   styleGuidance,
-  loadRecentMessages,
   buildSessionProfile,
-  analyzeStyle,
 } from "./chat-utils";
 
 function buildContext(entries: ListenEntry[], phashMap?: Map<number, string>): string {

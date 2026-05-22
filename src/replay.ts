@@ -29,14 +29,10 @@ import { join, resolve } from "node:path";
 import { computeDHash } from "./phash";
 import { cleanVisionDescription } from "./clean-vision";
 import { downloadImage, gifToJpeg } from "./image-download";
-import { parseAtUsers, hasAtAll, stripCqCodes, estimateMsgType } from "./cq-codes";
+import { parseAtUsers, stripCqCodes, estimateMsgType } from "./cq-codes";
 import {
   extractKeywords,
   analyzeAtmosphere,
-  analyzeStyle,
-  styleGuidance,
-  buildSessionProfile,
-  loadRecentMessages,
   isVagueDescription,
   quickDecideSilence,
 } from "./chat-utils";

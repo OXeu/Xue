@@ -37,7 +37,6 @@ import { parseAtUsers, hasAtAll, stripCqCodes, estimateMsgType } from "./cq-code
 import {
   extractKeywords,
   analyzeAtmosphere,
-  analyzeStyle,
   styleGuidance,
   buildSessionProfile,
   loadRecentMessages,
@@ -424,7 +423,6 @@ function connect(): void {
 
     // 加载上下文（轻量操作，先做，后续沉默检查要用）
     const recent = loadRecentMessages(RAW_DIR, entry.session, MAX_CONTEXT);
-    const phashMap = new Map<number, string>();
     const contextText = buildContext(recent);
     const keywords = extractKeywords(recent, 5);
     const topicSummary = keywords.length > 0
@@ -492,11 +490,6 @@ function connect(): void {
         _imageCache.set(currentPhash, downloadedImg);
       }
     }
-    // 将当前图片的 phash 注入上下文
-    if (currentPhash) {
-      phashMap.set(entry.msgId, currentPhash);
-    }
-
     const roleInstruction = `【${getScenarioPrompt(scenarioKey, BOT_NAME)}】`;
 
     try {
