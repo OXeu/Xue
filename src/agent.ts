@@ -195,11 +195,19 @@ const _imageCache = new Map<string, { base64: string; mime: string }>();
 let _lastBotReply: { userId: number; session: string; time: number } | null = null;
 const CONTINUATION_WINDOW_MS = 60_000; // 同一用户 60 秒内继续发消息视为对话延续
 
-/** 同一用户在同一会话中刚被回复过，判定为对话延续。 */
-function isConversationContinuation(userId: number, session: string): boolean {
+/** 同一用户在同一会话中刚被回复过，判定为对话延续。now 参数用于测试。 */
+export function isConversationContinuation(userId: number, session: string, now?: number): boolean {
   if (!_lastBotReply) return false;
   if (_lastBotReply.userId !== userId || _lastBotReply.session !== session) return false;
-  return (Date.now() - _lastBotReply.time) <= CONTINUATION_WINDOW_MS;
+  return (now ?? Date.now()) - _lastBotReply.time <= CONTINUATION_WINDOW_MS;
+}
+
+export function setLastBotReply(userId: number, session: string, time?: number): void {
+  _lastBotReply = { userId, session, time: time ?? Date.now() };
+}
+
+export function clearLastBotReply(): void {
+  _lastBotReply = null;
 }
 
 const DESCRIBE_IMAGE_TOOL = {
@@ -602,7 +610,7 @@ function connect(): void {
         sendGroupMsg(ws!, data.group_id as number, quickReply);
       }
       log(`replied: ${quickReply.slice(0, 100)}`);
-      _lastBotReply = { userId: entry.userId, session: entry.session, time: Date.now() };
+      setLastBotReply(entry.userId, entry.session);
       return;
     }
 
@@ -729,7 +737,7 @@ function connect(): void {
           sendGroupMsg(ws!, data.group_id as number, finalReply);
           log(`replied: ${finalReply.slice(0, 100)}`);
         }
-        _lastBotReply = { userId: entry.userId, session: entry.session, time: Date.now() };
+        setLastBotReply(entry.userId, entry.session);
       } else {
         log("no reply (model chose silence or vision loop exhausted)");
       }
