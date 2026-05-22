@@ -10,5 +10,8 @@
     "listen": "bun src/listen.ts",
     "lint": "echo 'TODO'"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "bun-types": "^1.3.14"
+  }
 }

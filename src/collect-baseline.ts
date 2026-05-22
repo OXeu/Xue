@@ -101,7 +101,7 @@ function main() {
 
   // 读取所有 outbox 文件
   const files = readdirSync(RIN_OUTBOX)
-    .filter((f) => f.startsWith("re-") && f.endsWith(".md"))
+    .filter((f: string) => f.startsWith("re-") && f.endsWith(".md"))
     .sort();
 
   console.log(`  找到 ${files.length} 封回信`);

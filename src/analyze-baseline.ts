@@ -6,7 +6,7 @@
  * 用法: bun run analyze-baseline
  */
 
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 // ── 路径 ────────────────────────────────────────────────
@@ -35,7 +35,7 @@ interface OutboxCache {
 
 function readLatestJsonl(): BaselineEntry[] {
   const files = readdirSync(JSONL_DIR)
-    .filter((f) => f.startsWith("baseline-") && f.endsWith(".jsonl"))
+    .filter((f: string) => f.startsWith("baseline-") && f.endsWith(".jsonl"))
     .sort()
     .reverse();
 
@@ -47,7 +47,7 @@ function readLatestJsonl(): BaselineEntry[] {
   const latest = join(JSONL_DIR, files[0]);
   console.log(`读取基线文件: ${latest}`);
   const lines = readFileSync(latest, "utf8").trim().split("\n").filter(Boolean);
-  return lines.map((l) => JSON.parse(l) as BaselineEntry);
+  return lines.map((l: string) => JSON.parse(l) as BaselineEntry);
 }
 
 /** 读取 outbox 原始内容（用于风格分析）。 */
@@ -286,17 +286,14 @@ ${longest5.map((e) => {
   // 确保 docs/ 存在
   const docsDir = resolve(import.meta.dirname, "../docs");
   if (!existsSync(docsDir)) {
-    const { mkdirSync } = require("node:fs");
     mkdirSync(docsDir, { recursive: true });
   }
 
   // 保留最近一次报告作为 .md.bak
   if (existsSync(REPORT)) {
-    const { renameSync } = require("node:fs");
     renameSync(REPORT, REPORT.replace(".md", ".md.bak"));
   }
 
-  const { writeFileSync } = require("node:fs");
   writeFileSync(REPORT, report, "utf8");
   console.log(`报告已写入: ${REPORT}`);
   console.log(`  显著发现:`);
