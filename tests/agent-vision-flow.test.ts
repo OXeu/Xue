@@ -499,6 +499,100 @@ describe("describe_image tool calling", () => {
     expect(parsed.tools[0].type).toBe("function");
     expect(parsed.tools[0].function.name).toBe("describe_image");
   });
+
+  test("工具参数解析失败时注入错误消息", async () => {
+    // 模拟 LLM 返回非法 JSON 的 arguments
+    globalThis.fetch = ((url: string | URL | Request, ...args: any[]): Promise<Response> => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+      if (urlStr.includes("/chat/completions")) {
+        const opts = args[0] as RequestInit | undefined;
+        const body = typeof opts?.body === "string" ? JSON.parse(opts.body) : null;
+
+        if (body?.model !== "gemma4:26b") {
+          // 返回非法 JSON arguments
+          return Promise.resolve(new Response(
+            JSON.stringify({
+              choices: [{
+                message: {
+                  content: null,
+                  tool_calls: [{
+                    id: "call_bad_json",
+                    type: "function",
+                    function: {
+                      name: "describe_image",
+                      arguments: "{id: no-quotes, question: missing quotes}", // 非法 JSON
+                    },
+                  }],
+                },
+              }],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ));
+        }
+      }
+      return Promise.resolve(new Response(
+        JSON.stringify({ choices: [{ message: { content: "" } }] }),
+        { status: 200 },
+      ));
+    }) as typeof globalThis.fetch;
+
+    const messages: any[] = [
+      { role: "system", content: "test" },
+      { role: "user", content: "看看图片" },
+    ];
+
+    // 模拟生产代码中的 while 循环逻辑
+    const tools = [{
+      type: "function" as const,
+      function: { name: "describe_image", description: "", parameters: { type: "object", properties: {} as any, required: [] as string[] } },
+    }];
+
+    const result = await (async () => {
+      // 模拟一次 callLlmWithTools 调用
+      const url = "http://127.0.0.1:11444/v1/chat/completions";
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "gpt-4o-mini", messages, tools }),
+      });
+      const data = (await res.json()) as any;
+      const msg = data.choices?.[0]?.message;
+      return {
+        content: msg?.content?.trim() ?? null,
+        tool_calls: msg?.tool_calls ?? null,
+      };
+    })();
+
+    expect(result.tool_calls).not.toBeNull();
+    expect(result.tool_calls!.length).toBe(1);
+
+    // 模拟生产代码中的参数解析逻辑
+    const tc = result.tool_calls![0];
+    let parseFailed = false;
+    try {
+      JSON.parse(tc.function.arguments);
+    } catch {
+      parseFailed = true;
+    }
+    expect(parseFailed).toBe(true);
+
+    // 验证"参数解析失败"会作为 tool 结果注入
+    const assistantMsg: any = {
+      role: "assistant",
+      content: null,
+      tool_calls: [tc],
+    };
+    messages.push(assistantMsg);
+    messages.push({
+      role: "tool",
+      tool_call_id: tc.id,
+      content: "参数解析失败",
+    });
+
+    const toolMsg = messages.find((m: any) => m.role === "tool" && m.content === "参数解析失败");
+    expect(toolMsg).toBeDefined();
+    expect(toolMsg.tool_call_id).toBe("call_bad_json");
+  });
 });
 
 // ── [图片] 标记 in buildContext ──────────────────────────
