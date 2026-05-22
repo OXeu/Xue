@@ -56,6 +56,14 @@ export interface InferenceEntry {
   timestamp: string;
 }
 
+export interface SessionSummary {
+  total: number;
+  success: number;
+  fail: number;
+  /** CDN 过期跳过 */
+  skipped: number;
+}
+
 // ── 持久化 ──────────────────────────────────────────────
 
 let _stickersDir = STICKERS_DIR;
@@ -113,7 +121,8 @@ export function saveInference(entry: InferenceEntry): void {
 let total = 0;
 let success = 0;
 let fail = 0;
-let skipped = 0;
+let dedupSkipped = 0;
+let cdnSkipped = 0;
 
 // ── 图片获取 ────────────────────────────────────────────
 
@@ -207,16 +216,17 @@ function formatContext(
   return ctx.map((c) => `${c.nickname}: ${c.text}`).join("\n");
 }
 
-/** 处理单个会话的 sticker 索引：读取、推理、持久化。导出以供测试直接调用。 */
+/** 处理单个会话的 sticker 索引：读取、推理、持久化。导出以供测试直接调用。
+ *  返回该会话的三类统计摘要。 */
 export async function processSession(
   session: string,
   options?: { reindex?: boolean; maxStickers?: number },
-): Promise<void> {
+): Promise<SessionSummary> {
   const reindex = options?.reindex ?? REINDEX;
   const maxStickers = options?.maxStickers ?? MAX_STICKERS;
 
   const stickerPath = join(_stickersDir, `${session}.jsonl`);
-  if (!existsSync(stickerPath)) return;
+  if (!existsSync(stickerPath)) return { total: 0, success: 0, fail: 0, skipped: 0 };
 
   const lines = readFileSync(stickerPath, "utf8").trim().split("\n").filter(Boolean);
   const stickers: StickerEntry[] = lines.map((l) => JSON.parse(l) as StickerEntry);
@@ -225,12 +235,12 @@ export async function processSession(
   const inferredIds = reindex ? new Set<number>() : loadInferredIds(session);
 
   for (const sticker of stickers) {
-    if (total >= maxStickers) return;
+    if (total >= maxStickers) return { total, success, fail, skipped: cdnSkipped };
     if (sticker.type !== "image") continue;
 
     // 跳过已推理的条目
     if (inferredIds.has(sticker.msgId)) {
-      skipped++;
+      dedupSkipped++;
       continue;
     }
 
@@ -254,6 +264,7 @@ export async function processSession(
     const img = await getImageBase64(sticker.content, sticker.session, sticker.msgId);
     if (!img) {
       console.log(`  ⏭ 跳过（CDN 已过期，无本地缓存）`);
+      cdnSkipped++;
       continue;
     }
 
@@ -286,6 +297,11 @@ export async function processSession(
       fail++;
     }
   }
+
+  // 会话摘要
+  console.log(`\n  ── ${session} 完成 ──`);
+  console.log(`  成功: ${success} | 分析失败: ${fail} | CDN 跳过: ${cdnSkipped} | 去重跳过: ${dedupSkipped}`);
+  return { total, success, fail, skipped: cdnSkipped };
 }
 
 async function main(): Promise<void> {
@@ -320,10 +336,11 @@ async function main(): Promise<void> {
 
   console.log(`\n${"=".repeat(40)}`);
   console.log(`处理完成`);
-  console.log(`  总计: ${total}`);
-  console.log(`  已跳过: ${skipped}`);
   console.log(`  成功: ${success}`);
-  console.log(`  失败: ${fail}`);
+  console.log(`  分析失败: ${fail}`);
+  console.log(`  CDN 跳过: ${cdnSkipped}`);
+  console.log(`  去重跳过: ${dedupSkipped}`);
+  console.log(`  总计处理: ${total}`);
   console.log(`  输出: ${_inferencesDir}/`);
 }
 
