@@ -53,6 +53,10 @@ export {
   quickDecideSilence,
 };
 
+// 配置加载与决策导出（供测试使用）
+export type { SessionConfig, ReplyProbabilities };
+export { DEFAULT_PROBS, loadSessionConfig, loadProbabilities, canReplyReal, decideReply };
+
 import {
   getSystemPrompt,
   getScenarioPrompt,
@@ -82,16 +86,34 @@ interface SessionConfig {
   reply: boolean;
 }
 
-/** 加载会话配置。文件不存在或格式错误时返回空对象。 */
-function loadSessionConfig(): Record<string, SessionConfig> {
+/** 各场景回复概率。不配置则使用代码默认值。*/
+interface ReplyProbabilities {
+  mentioned: number;
+  media: number;
+  bystander: number;
+}
+
+const DEFAULT_PROBS: ReplyProbabilities = {
+  mentioned: 0.7,
+  media: 0.1,
+  bystander: 0.05,
+};
+
+/** 加载会话配置和回复概率。文件不存在或格式错误时返回空对象/默认概率。 */
+function loadSessionConfig(configPath?: string): Record<string, SessionConfig> {
+  const path = configPath ?? CONFIG_PATH;
   try {
-    if (!existsSync(CONFIG_PATH)) return {};
-    const raw = readFileSync(CONFIG_PATH, "utf8");
-    const parsed = JSON.parse(raw) as Record<string, { reply?: boolean }>;
+    if (!existsSync(path)) return {};
+    const raw = readFileSync(path, "utf8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
     const result: Record<string, SessionConfig> = {};
     for (const [key, val] of Object.entries(parsed)) {
-      if (val && typeof val.reply === "boolean") {
-        result[key] = { reply: val.reply };
+      if (key === "probabilities") continue; // 全局概率，不走 session 配置
+      if (val && typeof val === "object" && "reply" in (val as Record<string, unknown>)) {
+        const v = val as { reply?: boolean };
+        if (typeof v.reply === "boolean") {
+          result[key] = { reply: v.reply };
+        }
       }
     }
     return result;
@@ -100,16 +122,41 @@ function loadSessionConfig(): Record<string, SessionConfig> {
   }
 }
 
+/** 从配置中提取全局回复概率，不配置的字段使用默认值。 */
+function loadProbabilities(configPath?: string): ReplyProbabilities {
+  const path = configPath ?? CONFIG_PATH;
+  try {
+    if (!existsSync(path)) return { ...DEFAULT_PROBS };
+    const raw = readFileSync(path, "utf8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const probs = parsed.probabilities as Partial<ReplyProbabilities> | undefined;
+    if (!probs) return { ...DEFAULT_PROBS };
+    return {
+      mentioned: typeof probs.mentioned === "number" ? probs.mentioned : DEFAULT_PROBS.mentioned,
+      media: typeof probs.media === "number" ? probs.media : DEFAULT_PROBS.media,
+      bystander: typeof probs.bystander === "number" ? probs.bystander : DEFAULT_PROBS.bystander,
+    };
+  } catch {
+    return { ...DEFAULT_PROBS };
+  }
+}
+
 const _sessionConfig = loadSessionConfig();
+const _replyProbs = loadProbabilities();
 
 /**
  * 检查某个会话是否允许真实回复（非 dry-run）。
  * 优先级：会话配置 > 全局 DRY_RUN。
  * 未在配置中的会话使用全局 DRY_RUN 行为。
+ * 可传 configOverride / dryRunOverride 用于测试。
  */
-function canReplyReal(sessionId: string): boolean {
-  if (!DRY_RUN) return true; // 全局非 dry-run，所有会话都真实回复
-  const cfg = _sessionConfig[sessionId];
+function canReplyReal(sessionId: string, overrides?: {
+  configOverride?: Record<string, SessionConfig>;
+  dryRunOverride?: boolean;
+}): boolean {
+  const dryRun = overrides?.dryRunOverride ?? DRY_RUN;
+  if (!dryRun) return true; // 全局非 dry-run，所有会话都真实回复
+  const cfg = (overrides?.configOverride ?? _sessionConfig)[sessionId];
   if (cfg !== undefined) return cfg.reply; // 会话配置覆写
   return false; // 全局 dry-run 且无配置 → dry-run
 }
@@ -334,16 +381,19 @@ interface ReplyDecision {
   reason: string; // 用于 prompt 告知 LLM 的角色定位
 }
 
-function decideReply(entry: ListenEntry, msgType: string, rawText: string): ReplyDecision {
+function decideReply(entry: ListenEntry, msgType: string, rawText: string, probs?: ReplyProbabilities, botQQ?: number): ReplyDecision {
+  const botId = botQQ ?? BOT_QQ;
   // 不要回复自己的消息
-  if (entry.userId === BOT_QQ || entry.selfId === entry.userId) {
+  if (entry.userId === botId || entry.selfId === entry.userId) {
     return { should: false, reason: "self" };
   }
 
-  const isAtSelf = entry.atUsers.includes(BOT_QQ);
+  const isAtSelf = entry.atUsers.includes(botId);
   const isAtAll = hasAtAll(rawText);
   const isAtOther = entry.atUsers.length > 0 && !isAtSelf && !isAtAll;
   const mentioned = stripCqCodes(rawText).toLowerCase().includes(BOT_NAME.toLowerCase());
+
+  const p = probs ?? DEFAULT_PROBS;
 
   // 被 @（自己）或 @全体 → 必回
   if (isAtSelf || isAtAll) {
@@ -352,17 +402,17 @@ function decideReply(entry: ListenEntry, msgType: string, rawText: string): Repl
 
   // 被提到名字 → 大概率回
   if (mentioned) {
-    return { should: Math.random() < 0.7, reason: "mentioned" };
+    return { should: Math.random() < p.mentioned, reason: "mentioned" };
   }
 
   // 纯表情/图片 → 低概率
   if (msgType === "face" || msgType === "image") {
-    return { should: Math.random() < 0.1, reason: "media" };
+    return { should: Math.random() < p.media, reason: "media" };
   }
 
   // 被 @ 别人 → 旁观者模式，降低概率
   if (isAtOther) {
-    return { should: Math.random() < 0.05, reason: "bystander" };
+    return { should: Math.random() < p.bystander, reason: "bystander" };
   }
 
   // 默认
@@ -452,7 +502,7 @@ function connect(): void {
     // 决策是否回复（私聊必回但跳过自己的消息，群聊按原有逻辑）
     const decision = isPrivate
       ? { should: userId !== BOT_QQ, reason: "private" }
-      : decideReply(entry, msgType, rawMessage);
+      : decideReply(entry, msgType, rawMessage, _replyProbs);
     if (!decision.should) return;
 
     const senderName = entry.card || entry.nickname;
