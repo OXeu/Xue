@@ -2,8 +2,11 @@
  * replay.ts — 重放历史群聊消息，模拟 agent 回复决策与 LLM 调用
  *
  * 不连接 OneBot。从 JSONL 读取旧消息，按时间顺序逐条回放。
- * 图片消息优先使用 data/test-images/ 中的缓存描述，
- * 未缓存时从 picsum.photos 用固定种子下载后描述并写入缓存。
+ * 图片消息处理采用 tool calling 模式（与 agent.ts 一致）：
+ *   收到图片 → 计算 pHash → 在上下文中显示 [图片 #phash_xxx]
+ *   → Agent 通过工具调用（describe_image）询问图片内容
+ *   → 系统执行工具调用视觉模型 → 工具结果注入对话 → Agent 可继续追问或直接回复
+ *   （每消息最多 5 轮问答）
  *
  * 用法:
  *   LLM_API_KEY=sk-xxx bun run src/replay.ts
@@ -21,8 +24,9 @@
  *   MAX_MSGS               最多处理 N 条消息（从最新往前），默认全部
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { computeDHash } from "./phash";
 import { cleanVisionDescription } from "./clean-vision";
 import { getCachedDescription, saveCachedImage } from "./image-cache";
 import {
@@ -46,6 +50,38 @@ const MAX_MSGS = process.env.MAX_MSGS ? Number(process.env.MAX_MSGS) : Infinity;
 
 const RAW_DIR = resolve(import.meta.dirname, "../data/raw");
 const INFERENCES_DIR = resolve(import.meta.dirname, "../data/inferences");
+
+/** 临时图片缓存：pHash → base64 + mime */
+const _imageCache = new Map<string, { base64: string; mime: string }>();
+
+const _inferencesDir = resolve(import.meta.dirname, "../data/inferences");
+
+const DESCRIBE_IMAGE_TOOL = {
+  type: "function" as const,
+  function: {
+    name: "describe_image",
+    description: "询问某张图片的内容。图片在上下文中以 [图片 #phash_xxx] 形式出现，用 phash 作为 id 引用它。",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "图片的 phash ID（来自上下文中的 [图片 #phash_xxx]）" },
+        question: { type: "string", description: "你想问这张图片的具体问题" },
+      },
+      required: ["id", "question"],
+    },
+  },
+};
+
+interface ToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+interface LlmResponse {
+  content: string | null;
+  tool_calls: ToolCall[] | null;
+}
 
 // ── 类型 ────────────────────────────────────────────────
 
@@ -316,11 +352,7 @@ function decideReply(
   return { should: Math.random() < REPLY_CHANCE, reason: "random" };
 }
 
-function roleInstruction(reason: string, imgDesc?: string): string {
-  if (imgDesc) {
-    return `【消息中包含一张图片，描述如下：${imgDesc}。回复时可以结合图片内容。】`;
-  }
-  // 从 prompts/system.md 提取场景指令，找不到时 fallback 到 default
+function roleInstruction(reason: string): string {
   const prompt = getScenarioPrompt(reason, BOT_NAME);
   return prompt ? `【${prompt}】` : `【${getScenarioPrompt("default", BOT_NAME)}】`;
 }
@@ -340,23 +372,10 @@ async function downloadImage(url: string): Promise<{ base64: string; mime: strin
   }
 }
 
-/** 用视觉模型描述图片，返回纯描述文本 */
-async function describeImage(
-  url: string,
-  session: string,
-  msgId: number,
-): Promise<string | null> {
-  // 查缓存
-  const cached = getCachedDescription(session, msgId);
-  if (cached) return cached;
-
+/** 用视觉模型描述图片（从 base64），返回纯描述文本 */
+async function describeImageFromBase64(question: string, base64: string, mime: string): Promise<string | null> {
   if (!VISION_MODEL) return null;
-
-  const img = await downloadImage(url);
-  if (!img) return null;
-
-  const dataUri = `data:${img.mime};base64,${img.base64}`;
-
+  const dataUri = `data:${mime};base64,${base64}`;
   try {
     const res = await fetch(`${VISION_BASE_URL}/chat/completions`, {
       method: "POST",
@@ -369,59 +388,25 @@ async function describeImage(
         messages: [{
           role: "user",
           content: [
-            { type: "text", text: "用一句话简短描述这张图片的内容" },
+            { type: "text", text: question },
             { type: "image_url", image_url: { url: dataUri } },
           ],
         }],
-        max_tokens: 100,
-        temperature: 0.5,
+        max_tokens: 200,
+        temperature: 0.3,
       }),
     });
-
     if (!res.ok) return null;
     const json = (await res.json()) as {
       choices: { message: { content?: string; reasoning?: string } }[];
     };
     const msg = json.choices?.[0]?.message;
-
-    const rawReasoning = msg?.reasoning?.trim();
-    if (rawReasoning) {
-      const clean = cleanVisionDescription(rawReasoning);
-      if (clean) {
-        try { saveCachedImage(session, msgId, img.base64, img.mime, clean, url); } catch {}
-        return clean;
-      }
-    }
-    const rawContent = msg?.content?.trim();
-    if (rawContent) {
-      const clean = cleanVisionDescription(rawContent);
-      if (clean) {
-        try { saveCachedImage(session, msgId, img.base64, img.mime, clean, url); } catch {}
-        return clean;
-      }
-    }
-    return null;
+    const raw = (msg?.reasoning || msg?.content || "").trim();
+    const clean = raw ? cleanVisionDescription(raw) : null;
+    return clean;
   } catch {
     return null;
   }
-}
-
-/** 获取图片消息的描述：优先用原始 URL，否则用 picsum 固定种子 */
-async function getImageDescription(e: ListenEntry): Promise<string | null> {
-  // 1) 查缓存
-  const cached = getCachedDescription(e.session, e.msgId);
-  if (cached) return cached;
-
-  // 2) 有原始 URL 则用原始 URL
-  if (e.imageUrls && e.imageUrls.length > 0) {
-    return describeImage(e.imageUrls[0], e.session, e.msgId);
-  }
-
-  // 3) 用 picsum 固定种子（保证每次重放相同）
-  const seed = `replay-${e.session}-${e.msgId}`;
-  const fallbackUrl = `https://picsum.photos/seed/${encodeURIComponent(seed)}/400/300`;
-  const desc = await describeImage(fallbackUrl, e.session, e.msgId);
-  return desc;
 }
 
 // ── LLM ────────────────────────────────────────────────
@@ -443,6 +428,39 @@ async function callLlm(messages: { role: string; content: string }[]): Promise<s
   return data.choices?.[0]?.message?.content?.trim() || "";
 }
 
+/** 支持工具调用的 LLM 请求 */
+async function callLlmWithTools(
+  messages: any[],
+  tools?: typeof DESCRIBE_IMAGE_TOOL[],
+): Promise<LlmResponse> {
+  const url = `${LLM_BASE_URL.replace(/\/+$/, "")}/chat/completions`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${LLM_API_KEY}`,
+  };
+  const body: Record<string, unknown> = {
+    model: LLM_MODEL,
+    messages,
+    max_tokens: 300,
+    temperature: 0.8,
+  };
+  if (tools && tools.length > 0) body.tools = tools;
+
+  const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`LLM ${res.status}: ${body.slice(0, 200)}`);
+  }
+  const data = (await res.json()) as {
+    choices: { message: { content?: string | null; tool_calls?: ToolCall[] | null } }[];
+  };
+  const msg = data.choices?.[0]?.message;
+  return {
+    content: msg?.content?.trim() ?? null,
+    tool_calls: msg?.tool_calls ?? null,
+  };
+}
+
 // ── 主流程 ──────────────────────────────────────────────
 
 interface ReplayResult {
@@ -456,7 +474,6 @@ interface ReplayResult {
   decision: ReplyDecision;
   reply?: string;
   contextSize: number;
-  imageDescription?: string;
 }
 
 async function main(): Promise<void> {
@@ -511,49 +528,120 @@ async function main(): Promise<void> {
       contextSize: contextEntries.length,
     };
 
-    // 获取图片描述（仅图片消息）
-    let imageDescription: string | null = null;
-    if (isImageMsg(e) && decision.should) {
-      imageDescription = await getImageDescription(e);
-      if (imageDescription) {
-        result.imageDescription = imageDescription;
-      }
-    }
-
-    // 如果决定回复，调 LLM
+    // 如果决定回复，调 LLM（工具调用模式）
     if (decision.should) {
       const phashMap = loadPhashMap(SESSION);
+
+      // 如果是图片消息，下载图片并计算 phash
+      let hasImage = false;
+      let currentPhash: string | null = null;
+      if (isImageMsg(e)) {
+        // 尝试从 imageUrls 或 CQ 码中获取 URL
+        const imgUrl = e.imageUrls?.[0] ?? null;
+        if (imgUrl) {
+          const downloaded = await downloadImage(imgUrl);
+          if (downloaded) {
+            hasImage = true;
+            currentPhash = await computeDHash(downloaded.base64, downloaded.mime);
+            _imageCache.set(currentPhash, downloaded);
+            // 保存 phash 到 inference 文件
+            try {
+              if (!existsSync(_inferencesDir)) mkdirSync(_inferencesDir, { recursive: true });
+              appendFileSync(
+                join(_inferencesDir, `${SESSION}.jsonl`),
+                JSON.stringify({ msgId: e.msgId, session: SESSION, phash: currentPhash, timestamp: new Date().toISOString() }) + "\n",
+                "utf8",
+              );
+            } catch {}
+            phashMap.set(e.msgId, currentPhash);
+          }
+        }
+      }
+
       const contextText = buildContext(contextEntries, phashMap);
       const keywords = extractKeywords(contextEntries, 5);
       const topicSummary = keywords.length > 0 ? `当前话题：${keywords.join("、")}` : "";
-      const roleInst = roleInstruction(decision.reason, imageDescription ?? undefined);
 
       try {
-        const reply = await callLlm([
-          {
-            role: "system",
-            content: [
-              getSystemPrompt(BOT_NAME),
-              getReplyRules(),
-              buildSessionProfile(SESSION),
-              styleGuidance(buildSessionProfile(SESSION)),
-              topicSummary,
-              `\n下面是这个群最近的消息：`,
-              roleInst,
-            ].filter(Boolean).join("\n"),
-          },
+        // 构建 system prompt
+        const systemParts = [
+          getSystemPrompt(BOT_NAME),
+          getReplyRules(),
+          buildSessionProfile(SESSION),
+          styleGuidance(buildSessionProfile(SESSION)),
+          topicSummary,
+          `\n下面是这个群最近的消息：`,
+          roleInstruction(decision.reason),
+        ];
+        if (hasImage && VISION_MODEL) {
+          // 从 prompts/vision.md 获取工具描述
+          const visionPath = resolve(import.meta.dirname, "../prompts/vision.md");
+          let visionPrompt = "";
+          try { visionPrompt = readFileSync(visionPath, "utf8"); } catch {}
+          if (visionPrompt) systemParts.push(`\n\n${visionPrompt}`);
+        }
+
+        const messages: any[] = [
+          { role: "system", content: systemParts.filter(Boolean).join("\n") },
           {
             role: "user",
             content: `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${cleanText || "[图片]"}\n\n请以 ${BOT_NAME} 的身份自然回复。`,
           },
-        ]);
-        result.reply = reply;
-        console.log(`[${result.time}] ${result.sender} [${decision.reason}]`);
-        console.log(`  触发: ${cleanText.slice(0, 60) || "(图片)"}`);
-        if (imageDescription) console.log(`  图片: ${imageDescription.slice(0, 80)}`);
-        console.log(`  回复: ${reply.slice(0, 120)}`);
-        console.log(`  话题: ${topicSummary || "(无)"}`);
-        console.log();
+        ];
+
+        // 工具调用循环
+        let finalReply: string | null = null;
+        let rounds = 0;
+        let toolCallCount = 0;
+
+        while (!finalReply && rounds < 5) {
+          rounds++;
+          const tools = (hasImage && VISION_MODEL) ? [DESCRIBE_IMAGE_TOOL] : undefined;
+          const llmResult = await callLlmWithTools(messages, tools);
+
+          if (llmResult.tool_calls && llmResult.tool_calls.length > 0 && VISION_MODEL) {
+            for (const tc of llmResult.tool_calls) {
+              if (tc.function.name === "describe_image") {
+                let args: { id: string; question: string };
+                try {
+                  args = JSON.parse(tc.function.arguments);
+                } catch {
+                  const asst: any = { role: "assistant", content: null, tool_calls: [tc] };
+                  messages.push(asst);
+                  messages.push({ role: "tool", tool_call_id: tc.id, content: "参数解析失败" });
+                  continue;
+                }
+                const { id, question } = args;
+                const cachedImg = _imageCache.get(id);
+                let toolResult: string;
+                if (cachedImg) {
+                  const answer = await describeImageFromBase64(question, cachedImg.base64, cachedImg.mime);
+                  toolResult = answer || "(分析失败)";
+                } else {
+                  toolResult = "（该图片数据已过期，无法查看）";
+                }
+                toolCallCount++;
+                const asst: any = { role: "assistant", content: null, tool_calls: [tc] };
+                messages.push(asst);
+                messages.push({ role: "tool", tool_call_id: tc.id, content: toolResult });
+              }
+            }
+          } else if (llmResult.content) {
+            finalReply = llmResult.content;
+          } else {
+            break;
+          }
+        }
+
+        if (finalReply) {
+          result.reply = finalReply;
+          console.log(`[${result.time}] ${result.sender} [${decision.reason}]`);
+          console.log(`  触发: ${cleanText.slice(0, 60) || "(图片)"}`);
+          if (toolCallCount > 0) console.log(`  工具调用: ${toolCallCount} 次`);
+          console.log(`  回复: ${finalReply.slice(0, 120)}`);
+          console.log(`  话题: ${topicSummary || "(无)"}`);
+          console.log();
+        }
       } catch (err) {
         console.error(`  LLM error: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -565,14 +653,12 @@ async function main(): Promise<void> {
   // 汇总
   const decided = results.filter((r) => r.decision.should);
   const replied = results.filter((r) => r.reply);
-  const withImg = results.filter((r) => r.imageDescription);
 
   console.log(`─".repeat(40)`);
   console.log(`汇总:`);
   console.log(`  总消息: ${results.length}`);
   console.log(`  决定回复: ${decided.length}`);
   console.log(`  实际回复 (LLM): ${replied.length}`);
-  console.log(`  含图片描述: ${withImg.length}`);
   console.log(`  决策分布:`);
   const dist: Record<string, number> = {};
   for (const d of decided) {
