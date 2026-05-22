@@ -77,6 +77,11 @@ function parseAtUsers(raw: string): number[] {
   return ids;
 }
 
+/** 检查是否 @全体成员 */
+function hasAtAll(raw: string): boolean {
+  return /\[CQ:at,qq=all\]/.test(raw);
+}
+
 /** 剥离 CQ 码，提取纯文本内容 */
 function stripCqCodes(raw: string): string {
   return raw
@@ -88,9 +93,14 @@ function stripCqCodes(raw: string): string {
 function estimateMsgType(raw: string): "text" | "face" | "image" | "mixed" {
   const cqTypes = [...raw.matchAll(/\[CQ:(\w+),/g)].map((m) => m[1]);
   if (cqTypes.length === 0) return "text";
+
+  // 如果有 CQ 码之外的文字内容，不可能是 pure face/image
+  const stripped = stripCqCodes(raw);
+  if (stripped.length > 0) return "mixed";
+
   if (cqTypes.every((t) => t === "face")) return "face";
   if (cqTypes.every((t) => t === "image")) return "image";
-  if (cqTypes.every((t) => t === "text" || t === "face")) return "face";
+  if (cqTypes.every((t) => t === "face" || t === "image")) return "mixed";
   return "mixed";
 }
 
@@ -104,7 +114,7 @@ const STOPWORDS = new Set([
   "之前", "现在", "今天", "明天", "昨天", "晚上", "早上",
   "中午", "那个", "这种", "这样", "那种", "那个", "已经",
   "应该", "可能", "大概", "比较", "非常", "真的", "其实",
-  "还是", "还是", "就是", "觉得", "知道", "看到", "听到",
+  "还是", "就是", "觉得", "知道", "看到", "听到",
   "起来", "出来", "回来", "进去", "过来", "上去", "下来",
   "一下", "一点", "一些", "一个", "这种", "那些", "这些",
   "吗", "啊", "吧", "呢", "哦", "嗯", "哈", "哎", "哟",
@@ -212,12 +222,13 @@ function decideReply(entry: ListenEntry, msgType: string, rawText: string): Repl
   }
 
   const isAtSelf = entry.atUsers.includes(BOT_QQ);
-  const isAtOther = entry.atUsers.length > 0 && !isAtSelf;
+  const isAtAll = hasAtAll(rawText);
+  const isAtOther = entry.atUsers.length > 0 && !isAtSelf && !isAtAll;
   const mentioned = stripCqCodes(rawText).toLowerCase().includes(BOT_NAME.toLowerCase());
 
-  // 被 @（自己）→ 必回
-  if (isAtSelf) {
-    return { should: true, reason: "at-self" };
+  // 被 @（自己）或 @全体 → 必回
+  if (isAtSelf || isAtAll) {
+    return { should: true, reason: isAtSelf ? "at-self" : "at-all" };
   }
 
   // 被提到名字 → 大概率回
@@ -331,6 +342,8 @@ function connect(): void {
     let roleInstruction: string;
     if (decision.reason === "at-self") {
       roleInstruction = `【消息是发给你的，你被直接 @ 了，请以 ${BOT_NAME} 的身份回应。】`;
+    } else if (decision.reason === "at-all") {
+      roleInstruction = `【消息 @ 了全体成员，也包括你。请像普通群成员一样自然回应。】`;
     } else if (decision.reason === "mentioned") {
       roleInstruction = `【消息中提到了你的名字（${BOT_NAME}），虽然没 @ 你，但你可以接话。】`;
     } else if (decision.reason === "bystander") {
