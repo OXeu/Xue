@@ -15,7 +15,8 @@ rin-research-humanize/
 │   ├── simulate.ts         # 模拟重放：不调 LLM，只输出决策和 prompt，零成本评估
 │   ├── replay.ts           # 重放历史消息：调 LLM 生成实际回复，用于验证
 │   ├── clean-vision.ts     # 清洗视觉模型的 reasoning 输出，提取纯文本描述
-│   └── image-cache.ts      # 图片缓存（data/images/），供 replay 复用
+│   ├── image-cache.ts      # 图片缓存（data/images/），供 replay 复用
+│   └── image-download.ts   # 图片下载（fetch → base64 → mime），供 agent/replay 复用
 ├── scripts/
 │   ├── start-agent.sh      # 后台启动 agent（写 PID、日志重定向）
 │   ├── stop-agent.sh       # 停止 agent
@@ -23,6 +24,7 @@ rin-research-humanize/
 ├── tests/
 │   ├── clean-vision.test.ts
 │   ├── image-cache.test.ts
+│   ├── image-download.test.ts
 │   ├── listen.test.ts
 │   ├── listen-image-cache.test.ts
 │   ├── phash.test.ts
@@ -150,5 +152,5 @@ LLM_API_KEY=sk-xxx MAX_MSGS=22 bun run replay
 | `bun run start-agent` | 后台启动 agent |
 | `bun run stop-agent` | 停止 agent |
 | `bun run status-agent` | 检查 agent 状态 |
-| `bun test` | 运行测试（132 例） |
+| `bun test` | 运行测试（194 例） |
 | `bun run typecheck` | TypeScript 类型检查 |
