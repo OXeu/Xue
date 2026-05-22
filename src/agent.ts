@@ -28,8 +28,8 @@
  *                        http://127.0.0.1:11444/v1 使用本地 Ollama）
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, readdirSync } from "node:fs";
+import { resolve } from "node:path";
 import { computeDHash } from "./phash";
 import { cleanVisionDescription } from "./clean-vision";
 import { downloadImage, gifToJpeg } from "./image-download";
@@ -42,7 +42,6 @@ import {
   buildSessionProfile,
   loadRecentMessages,
   isVagueDescription,
-  persistBestDescription,
   quickDecideSilence,
 } from "./chat-utils";
 
@@ -50,7 +49,6 @@ import {
 export {
   analyzeAtmosphere,
   isVagueDescription,
-  persistBestDescription,
   styleGuidance,
   buildSessionProfile,
   quickDecideSilence,
@@ -79,11 +77,6 @@ const VISION_MODEL = process.env.VISION_MODEL || "";
 const VISION_BASE_URL = (process.env.VISION_BASE_URL || LLM_BASE_URL).replace(/\/+$/, "");
 
 const RAW_DIR = resolve(import.meta.dirname, "../data/prod/raw");
-let _inferencesDir = resolve(import.meta.dirname, "../data/prod/inferences");
-
-function ensureInferencesDir(): void {
-  if (!existsSync(_inferencesDir)) mkdirSync(_inferencesDir, { recursive: true });
-}
 
 /** 临时图片缓存：pHash → base64 + mime。在单次 onmessage 调用期间有效。 */
 const _imageCache = new Map<string, { base64: string; mime: string }>();
@@ -213,71 +206,8 @@ export async function callVision(query: string, base64: string, mime: string): P
 
 // ── 上下文 ──────────────────────────────────────────────
 
-/**
- * 从 buildSessionProfile 的输出中解析风格行，生成语气指导。
- *
- * 映射规则（基于 style-report 中真人基线校准）：
- * - 短句偏多 → 回复请尽量控制在 20 字以内
- * - 短句适中 → 回复尽量简短
- * - 短句偏少 → 回复可适当展开，但避免长篇大论
- * - 语气词偏多 → 少用语气词（哈/嘛/嗯/哦）
- * - 语气词适中 → 语气自然即可
- * - 语气词偏少 → 保持简洁语气
- * - 问句偏多 → 可适度用问句
- * - 问句适中 → 可适当使用问句
- * - 问句偏少 → 减少问句
- */
-/** 加载某会话已缓存的图片 phash 记录，返回 msgId → phash 映射表。
- *  兼容新旧格式：检测 entry.phash 和 entry.inference 字段。 */
-export function loadPhashMap(session: string): Map<number, string> {
-  const path = join(_inferencesDir, `${session}.jsonl`);
-  if (!existsSync(path)) return new Map();
-
-  const map = new Map<number, string>();
-  const lines = readFileSync(path, "utf8").trim().split("\n").filter(Boolean);
-  for (const line of lines) {
-    try {
-      const entry = JSON.parse(line);
-      if (entry.msgId) {
-        if (entry.phash) {
-          map.set(entry.msgId, entry.phash);
-        } else if (entry.inference) {
-          // 兼容旧格式：inference 字段作为 phash（老数据）
-          map.set(entry.msgId, entry.inference);
-        }
-      }
-    } catch { /* skip corrupt lines */ }
-  }
-  return map;
-}
-
-/** 从 data/prod/inferences/{session}.jsonl 中查找某个 msgId 的缓存视觉描述。
- *  当图片下载失败时，用此兜底注入 [图片描述: ...] 到消息文本中。 */
-export function loadCachedInference(session: string, msgId: number): string | null {
-  const path = join(_inferencesDir, `${session}.jsonl`);
-  if (!existsSync(path)) return null;
-  const lines = readFileSync(path, "utf8").trim().split("\n").filter(Boolean);
-  for (const line of lines) {
-    try {
-      const entry = JSON.parse(line);
-      if (entry.msgId === msgId && entry.inference && typeof entry.inference === "string") {
-        return entry.inference;
-      }
-    } catch { /* skip */ }
-  }
-  return null;
-}
-
+/** 构建可读的上下文文本。图片消息显示 [图片] 标记。 */
 export function buildContext(entries: ListenEntry[]): string {
-  return buildContextWithPhashIds(entries, new Map());
-}
-
-/** 带 phash ID 注入的上下文构建。
- *  phashMap 可由 loadPhashMap() 加载，有 phash 时显示 [图片 #phash_xxx] 而非纯 [图片]。 */
-export function buildContextWithPhashIds(
-  entries: ListenEntry[],
-  phashMap: Map<number, string>,
-): string {
   if (entries.length === 0) return "（暂无历史消息）";
 
   return entries
@@ -289,15 +219,7 @@ export function buildContextWithPhashIds(
       const at = e.atUsers.length > 0 ? ` @${e.atUsers.join(",")}` : "";
       const reply = e.replyTo ? ` (回复 ${e.replyTo})` : "";
       const text = e.text || `[${e.type}]`;
-      let imgMark = "";
-      if (e.segmentTypes?.includes("image")) {
-        const phash = phashMap.get(e.msgId);
-        if (phash) {
-          imgMark = ` [图片 #${phash}]`;
-        } else {
-          imgMark = " [图片]";
-        }
-      }
+      const imgMark = e.segmentTypes?.includes("image") ? " [图片]" : "";
       return `[${time}] ${name}${at}${reply}: ${text}${imgMark}`;
     })
     .join("\n");
@@ -502,8 +424,8 @@ function connect(): void {
 
     // 加载上下文（轻量操作，先做，后续沉默检查要用）
     const recent = loadRecentMessages(RAW_DIR, entry.session, MAX_CONTEXT);
-    const phashMap = loadPhashMap(entry.session);
-    const contextText = buildContextWithPhashIds(recent, phashMap);
+    const phashMap = new Map<number, string>();
+    const contextText = buildContext(recent);
     const keywords = extractKeywords(recent, 5);
     const topicSummary = keywords.length > 0
       ? `当前话题：${keywords.join("、")}`
@@ -524,27 +446,13 @@ function connect(): void {
           if (downloaded) {
             const phash = await computeDHash(downloaded.base64, downloaded.mime);
             _imageCache.set(phash, downloaded);
-            try {
-              ensureInferencesDir();
-              appendFileSync(
-                join(_inferencesDir, `${entry.session}.jsonl`),
-                JSON.stringify({ msgId: entry.msgId, session: entry.session, phash, timestamp: new Date().toISOString() }) + "\n",
-                "utf8",
-              );
-            } catch {}
             if (VISION_MODEL) {
               const answer = await callVision("用一条简短的自然语句描述这张图片的核心内容：主体是什么、情绪或氛围如何、是否包含文字。不要模板化的描述。", downloaded.base64, downloaded.mime);
               if (answer && !isVagueDescription(answer)) {
                 imageDesc = answer;
-                persistBestDescription(_inferencesDir, entry.session, entry.msgId, phash, imageDesc);
               }
             }
           }
-        }
-        // 下载失败时查缓存
-        if (!imageDesc) {
-          const cached = loadCachedInference(entry.session, entry.msgId);
-          if (cached) imageDesc = cached;
         }
       }
 
@@ -576,24 +484,12 @@ function connect(): void {
     // 如果有图片，先下载图片
     let downloadedImg: { base64: string; mime: string } | null = null;
     let currentPhash: string | null = null;
-    let cachedDescription: string | null = null;
     if (/\[CQ:image/.test(rawMessage)) {
       const imgUrl = parseFirstImageUrl(rawMessage);
       if (imgUrl) downloadedImg = await downloadImage(imgUrl);
       if (downloadedImg) {
         currentPhash = await computeDHash(downloadedImg.base64, downloadedImg.mime);
         _imageCache.set(currentPhash, downloadedImg);
-        // 保存 phash 到 inference 文件，供将来上下文使用
-        try {
-          ensureInferencesDir();
-          appendFileSync(
-            join(_inferencesDir, `${entry.session}.jsonl`),
-            JSON.stringify({ msgId: entry.msgId, session: entry.session, phash: currentPhash, timestamp: new Date().toISOString() }) + "\n",
-            "utf8",
-          );
-        } catch {}
-      } else if (imgUrl) {
-        cachedDescription = loadCachedInference(entry.session, entry.msgId);
       }
     }
     // 将当前图片的 phash 注入上下文
@@ -620,10 +516,7 @@ function connect(): void {
       }
 
       // 初始消息列表
-      const descSuffix = cachedDescription
-        ? ` [图片描述: ${cachedDescription.slice(0, 80)}]`
-        : "";
-      const messageText = `${cleanText}${descSuffix}`;
+      const messageText = `${cleanText}`;
       const messages: any[] = [{
         role: "system",
         content: systemParts.filter(Boolean).join("\n"),
@@ -673,10 +566,6 @@ function connect(): void {
                 const answer = await callVision(question, cachedImg.base64, cachedImg.mime);
                 toolResult = answer || "(分析失败)";
                 log(`[describe_image a] ${toolResult.slice(0, 100)}`);
-                // 持久化视觉描述到 inferences 文件（只保存有信息量的描述，后轮覆盖前轮）
-                if (answer && !isVagueDescription(answer)) {
-                  persistBestDescription(_inferencesDir, entry.session, entry.msgId, id, answer);
-                }
               } else {
                 toolResult = "（该图片数据已过期，无法查看）";
                 log(`[describe_image] image data expired: ${id}`);

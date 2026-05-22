@@ -24,7 +24,7 @@
  *   MAX_MSGS               最多处理 N 条消息（从最新往前），默认全部
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { computeDHash } from "./phash";
 import { cleanVisionDescription } from "./clean-vision";
@@ -38,7 +38,6 @@ import {
   buildSessionProfile,
   loadRecentMessages,
   isVagueDescription,
-  persistBestDescription,
   quickDecideSilence,
 } from "./chat-utils";
 import {
@@ -61,12 +60,9 @@ const SESSION = process.env.SESSION || "group_313214094";
 const MAX_MSGS = process.env.MAX_MSGS ? Number(process.env.MAX_MSGS) : Infinity;
 
 const RAW_DIR = resolve(import.meta.dirname, "../data/prod/raw");
-const INFERENCES_DIR = resolve(import.meta.dirname, "../data/prod/inferences");
 
 /** 临时图片缓存：pHash → base64 + mime */
 const _imageCache = new Map<string, { base64: string; mime: string }>();
-
-const _inferencesDir = resolve(import.meta.dirname, "../data/prod/inferences");
 
 const DESCRIBE_IMAGE_TOOL = {
   type: "function" as const,
@@ -123,8 +119,7 @@ function isImageMsg(e: ListenEntry): boolean {
   return e.type === "image" || (e.segmentTypes?.includes("image") ?? false);
 }
 
-function buildContext(entries: ListenEntry[], phashMap?: Map<number, string>): string {
-  const ph = phashMap ?? new Map();
+function buildContext(entries: ListenEntry[]): string {
   if (entries.length === 0) return "（暂无历史消息）";
   return entries
     .map((e) => {
@@ -135,70 +130,10 @@ function buildContext(entries: ListenEntry[], phashMap?: Map<number, string>): s
       const at = e.atUsers.length > 0 ? ` @${e.atUsers.join(",")}` : "";
       const reply = e.replyTo ? ` (回复 ${e.replyTo})` : "";
       const text = e.text || `[${e.type}]`;
-      let imgMark = "";
-      if (e.segmentTypes?.includes("image")) {
-        const phash = ph.get(e.msgId);
-        if (phash) {
-          imgMark = ` [图片 #${phash}]`;
-        } else {
-          imgMark = " [图片]";
-        }
-      }
+      const imgMark = e.segmentTypes?.includes("image") ? " [图片]" : "";
       return `[${time}] ${name}${at}${reply}: ${text}${imgMark}`;
     })
     .join("\n");
-}
-
-/**
- * 从 buildSessionProfile 的输出中解析风格行，生成语气指导。
- *
- * 映射规则（基于 style-report 中真人基线校准）：
- * - 短句偏多 → 回复请尽量控制在 20 字以内
- * - 短句适中 → 回复尽量简短
- * - 短句偏少 → 回复可适当展开，但避免长篇大论
- * - 语气词偏多 → 少用语气词（哈/嘛/嗯/哦）
- * - 语气词适中 → 语气自然即可
- * - 语气词偏少 → 保持简洁语气
- * - 问句偏多 → 可适度用问句
- * - 问句适中 → 可适当使用问句
- /** 加载某会话已缓存的 phash 记录，返回 msgId → phash 映射表。
- *  兼容新旧格式：检测 entry.phash 和 entry.inference 字段。 */
-function loadPhashMap(session: string): Map<number, string> {
-  const path = resolve(INFERENCES_DIR, `${session}.jsonl`);
-  if (!existsSync(path)) return new Map();
-  const map = new Map<number, string>();
-  const lines = readFileSync(path, "utf8").trim().split("\n").filter(Boolean);
-  for (const line of lines) {
-    try {
-      const entry = JSON.parse(line);
-      if (entry.msgId) {
-        if (entry.phash) {
-          map.set(entry.msgId, entry.phash);
-        } else if (entry.inference) {
-          // 兼容旧格式：inference 字段作为 phash（老数据）
-          map.set(entry.msgId, entry.inference);
-        }
-      }
-    } catch { /* skip */ }
-  }
-  return map;
-}
-
-/** 从 data/prod/inferences/{session}.jsonl 中查找某个 msgId 的缓存视觉描述。
- *  当图片下载失败时，用此兜底。 */
-export function loadCachedInference(session: string, msgId: number): string | null {
-  const path = resolve(INFERENCES_DIR, `${session}.jsonl`);
-  if (!existsSync(path)) return null;
-  const lines = readFileSync(path, "utf8").trim().split("\n").filter(Boolean);
-  for (const line of lines) {
-    try {
-      const entry = JSON.parse(line);
-      if (entry.msgId === msgId && entry.inference && typeof entry.inference === "string") {
-        return entry.inference;
-      }
-    } catch { /* skip */ }
-  }
-  return null;
 }
 
 function ts(): string {
@@ -398,12 +333,11 @@ async function main(): Promise<void> {
 
     // 如果决定回复，做快速沉默检查（附带图片描述，如有）
     if (decision.should) {
-      const phashMap = loadPhashMap(SESSION);
       const ctxEntries = allEntries.slice(
         Math.max(0, allEntries.indexOf(e) - 30),
         allEntries.indexOf(e),
       );
-      const ctxText = buildContext(ctxEntries, phashMap);
+      const ctxText = buildContext(ctxEntries);
       const kws = extractKeywords(ctxEntries, 5);
       const summary = kws.length > 0 ? `当前话题：${kws.join("、")}` : "";
       const atmosphereTag = analyzeAtmosphere(ctxEntries);
@@ -417,26 +351,13 @@ async function main(): Promise<void> {
           if (downloaded) {
             const phash = await computeDHash(downloaded.base64, downloaded.mime);
             _imageCache.set(phash, downloaded);
-            try {
-              if (!existsSync(_inferencesDir)) mkdirSync(_inferencesDir, { recursive: true });
-              appendFileSync(
-                join(_inferencesDir, `${SESSION}.jsonl`),
-                JSON.stringify({ msgId: e.msgId, session: SESSION, phash, timestamp: new Date().toISOString() }) + "\n",
-                "utf8",
-              );
-            } catch {}
             if (VISION_MODEL) {
               const answer = await describeImageFromBase64("用一条简短的自然语句描述这张图片的核心内容：主体是什么、情绪或氛围如何、是否包含文字。不要模板化的描述。", downloaded.base64, downloaded.mime);
               if (answer && !isVagueDescription(answer)) {
                 imageDesc = answer;
-                persistBestDescription(_inferencesDir, SESSION, e.msgId, phash, imageDesc);
               }
             }
           }
-        }
-        if (!imageDesc) {
-          const cached = loadCachedInference(SESSION, e.msgId);
-          if (cached) imageDesc = cached;
         }
       }
 

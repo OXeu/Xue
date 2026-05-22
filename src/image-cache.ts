@@ -2,8 +2,7 @@
  * image-cache.ts — 图片缓存管理（基于 phash）
  *
  * 将从 CDN 下载的图片持久化到 data/prod/images/，以 phash 为文件名。
- * 不存储 URL 或描述文本——描述由 agent 按需调用视觉模型生成，存入
- * data/prod/inferences/{session}.jsonl（仅 phash → 描述映射）。
+ * 不存储 URL 或描述文本——描述由 agent 按需调用视觉模型生成，运行时保存在内存中。
  *
  * 缓存文件:
  *   data/prod/images/{phash}.{ext}   — 图片文件

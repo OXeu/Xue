@@ -26,7 +26,6 @@ const SESSION = process.env.SESSION || "group_313214094";
 const MAX_MSGS = Number(process.env.MAX_MSGS) || 50;
 
 const RAW_DIR = resolve(import.meta.dirname, "../data/prod/raw");
-const INFERENCES_DIR = resolve(import.meta.dirname, "../data/prod/inferences");
 
 // ── 类型 ────────────────────────────────────────────────
 

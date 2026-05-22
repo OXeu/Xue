@@ -9,7 +9,7 @@
  * （如 buildContext, callLlmWithTools, decideReply, loadPhashMap, loadCachedInference）。
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { stripCqCodes } from "./cq-codes";
 import {
@@ -253,45 +253,6 @@ export function isVagueDescription(desc: string): boolean {
 /**
  * 持久化最佳视觉描述到 inference 文件。
  * 读取现有文件 → 过滤同 msgId 的旧 inference 行 → 追加新行 → 覆盖写回。
- * 调用方负责先判断 isVagueDescription。
- */
-export function persistBestDescription(
-  dir: string,
-  session: string,
-  msgId: number,
-  phash: string,
-  desc: string,
-): void {
-  try {
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    const filePath = join(dir, `${session}.jsonl`);
-    let lines: string[] = [];
-    if (existsSync(filePath)) {
-      lines = readFileSync(filePath, "utf8").trim().split("\n").filter(Boolean);
-    }
-    const filtered = lines.filter((line) => {
-      try {
-        const parsed = JSON.parse(line);
-        return parsed.msgId !== msgId || !parsed.inference;
-      } catch {
-        return true;
-      }
-    });
-    filtered.push(
-      JSON.stringify({
-        msgId,
-        session,
-        phash,
-        inference: desc,
-        timestamp: new Date().toISOString(),
-      }),
-    );
-    writeFileSync(filePath, filtered.join("\n") + "\n", "utf8");
-  } catch {
-    // 静默失败，持久化不是关键路径
-  }
-}
-
 // ── 快速沉默决策 ────────────────────────────────────
 
 /** 对低确定性触发（random/bystander/media），先问模型有没有话想说。
