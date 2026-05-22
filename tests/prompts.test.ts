@@ -40,13 +40,12 @@ test("getReplyRules() 返回 reply.md 的完整内容", () => {
   expect(content).toContain("不要 formal");
 });
 
-test("getVisionFormat() 返回 Agent 自主提问的指令", () => {
+test("getVisionFormat() 返回 describe_image 工具的说明", () => {
   const content = getVisionFormat();
-  expect(content).toContain("[DESCRIBE id=phash_xxx]");
-  expect(content).toContain("问");
+  expect(content).toContain("describe_image");
+  expect(content).toContain("phash");
   // 应可直接用作 prompt 片段（不含 markdown 标题行）
   expect(content).not.toMatch(/^# /m);
-  // Agent 自主决定问题，不再有固定占位符
   expect(content).not.toContain("{IMAGE_DESCRIPTION}");
 });
 

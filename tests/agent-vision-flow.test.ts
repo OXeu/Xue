@@ -2,7 +2,7 @@
  * tests/agent-vision-flow.test.ts — 视觉问答流程单元测试
  *
  * 覆盖 callVision 的 payload 构造、响应解析、错误处理，
- * 以及消息循环中的 [DESCRIBE id=xxx] 标签解析与多轮追问逻辑。
+ * 以及消息循环中的工具调用（describe_image）与多轮追问逻辑。
  *
  * 所有测试 mock globalThis.fetch，测试完成后恢复。
  */
@@ -203,32 +203,35 @@ describe("callVision", () => {
   });
 });
 
-// ── [DESCRIBE id=xxx] 标签解析与视觉循环 ─────────────────
+// ── describe_image tool calling 视觉循环 ─────────────────
 
-describe("[DESCRIBE id=xxx] query parsing in agent message loop", () => {
+describe("describe_image tool calling", () => {
   const fakeBase64 = "dGVzdC1pbWFnZS1kYXRh";
   const fakeMime = "image/jpeg";
   const testPhash = "abc123";
 
-  /** 模拟一轮视觉循环：给定一个 LLM 回复序列，模拟 agent 的 while 循环逻辑 */
-  async function runSimulatedDescribeLoop(
-    llmResponses: string[],
+  type LlmResponseItem =
+    | { type: "tool_call"; id: string; question: string }
+    | { type: "content"; text: string };
+
+  /** 模拟一轮带 tool calling 的视觉循环 */
+  async function runSimulatedVisionLoop(
+    llmResponses: LlmResponseItem[],
     visionAnswers: (string | null)[],
     maxRounds = 5,
   ): Promise<{
     finalReply: string | null;
     rounds: number;
-    messages: { role: string; content: string }[];
+    messages: any[];
     visionCalls: string[];
+    llmToolArgsSent: string[];
   }> {
     let llmIndex = 0;
     let visionIndex = 0;
     const visionCalls: string[] = [];
+    const llmToolArgsSent: string[] = [];
 
-    // 模拟 _imageCache 中有 testPhash 的图片
-    // 通过 agent 内部 import，实际上我们模拟全局 fetch 来区分 LLM 和 vision 调用
-
-    // mock LLM calls → return predefined responses
+    // mock fetch: 区分 LLM 调用（模型不是 gemma4:26b）和 Vision 调用
     globalThis.fetch = ((url: string | URL | Request, ...args: any[]): Promise<Response> => {
       const urlStr = typeof url === "string" ? url : url.toString();
 
@@ -237,7 +240,7 @@ describe("[DESCRIBE id=xxx] query parsing in agent message loop", () => {
         const body = typeof opts?.body === "string" ? JSON.parse(opts.body) : null;
 
         if (body?.model === "gemma4:26b") {
-          // This is a vision call
+          // Vision 调用
           const answer = visionAnswers[visionIndex] ?? null;
           visionIndex++;
           return Promise.resolve(new Response(
@@ -246,11 +249,38 @@ describe("[DESCRIBE id=xxx] query parsing in agent message loop", () => {
           ));
         }
 
-        // This is an LLM call
-        const response = llmResponses[llmIndex] ?? "";
+        // LLM 调用
+        const item = llmResponses[llmIndex];
         llmIndex++;
+
+        if (item?.type === "tool_call") {
+          // 记录工具参数，供断言检查
+          const argsStr = JSON.stringify({ id: item.id, question: item.question });
+          llmToolArgsSent.push(argsStr);
+          return Promise.resolve(new Response(
+            JSON.stringify({
+              choices: [{
+                message: {
+                  content: null,
+                  tool_calls: [{
+                    id: "call_1",
+                    type: "function",
+                    function: {
+                      name: "describe_image",
+                      arguments: argsStr,
+                    },
+                  }],
+                },
+              }],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ));
+        }
+
+        // content 回复
+        const content = item?.type === "content" ? item.text : "";
         return Promise.resolve(new Response(
-          JSON.stringify({ choices: [{ message: { content: response } }] }),
+          JSON.stringify({ choices: [{ message: { content } }] }),
           { status: 200, headers: { "content-type": "application/json" } },
         ));
       }
@@ -258,7 +288,7 @@ describe("[DESCRIBE id=xxx] query parsing in agent message loop", () => {
       return Promise.resolve(new Response("", { status: 200 }));
     }) as typeof globalThis.fetch;
 
-    const messages: { role: string; content: string }[] = [
+    const messages: any[] = [
       { role: "system", content: "test system prompt" },
       { role: "user", content: "test user message" },
     ];
@@ -268,49 +298,69 @@ describe("[DESCRIBE id=xxx] query parsing in agent message loop", () => {
 
     while (!finalReply && rounds < maxRounds) {
       rounds++;
-      // Simulate LLM call (fetch mock handles it)
-      const llmUrl = "http://127.0.0.1:11444/v1/chat/completions?llm=1";
-      const llmRes = await fetch(llmUrl, {
+
+      // 模拟 LLM 调用（带 tools 参数）
+      const llmRes = await fetch("http://127.0.0.1:11444/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "gpt-4o-mini", messages }),
+        body: JSON.stringify({ model: "gpt-4o-mini", messages, tools: [{}] }),
       });
-      const llmData = (await llmRes.json()) as { choices: { message: { content: string } }[] };
-      const response = llmData.choices?.[0]?.message?.content?.trim() || "";
+      const llmData = (await llmRes.json()) as {
+        choices: { message: { content?: string | null; tool_calls?: any[] | null } }[];
+      };
+      const msg = llmData.choices?.[0]?.message;
 
-      // 解析 [DESCRIBE id=xxx] 标签
-      const describeMatch = response.match(/\[DESCRIBE id=([^\]]+)\]([\s\S]*?)\[\/DESCRIBE\]/);
+      if (msg?.tool_calls && msg.tool_calls.length > 0) {
+        for (const tc of msg.tool_calls) {
+          if (tc.function.name === "describe_image") {
+            const args = JSON.parse(tc.function.arguments);
+            visionCalls.push(args.question);
 
-      if (describeMatch) {
-        const id = describeMatch[1].trim();
-        const query = describeMatch[2].trim();
-        visionCalls.push(query);
+            // 模拟 _imageCache 查找
+            if (args.id === testPhash) {
+              const answer = await callVision(args.question, fakeBase64, fakeMime);
+              const toolResult = answer || "(分析失败)";
 
-        // 模拟 agent 中的 _imageCache 查找：有 testPhash 时正常调用
-        if (id === testPhash) {
-          const answer = await callVision(query, fakeBase64, fakeMime);
-          const displayAnswer = answer || "(分析失败)";
-
-          messages.push({ role: "assistant", content: response });
-          messages.push({ role: "user", content: `【图片回答】${displayAnswer}\n\n还需要问什么吗？已经够了就直接回复。` });
-        } else {
-          // phash 不在缓存中，模拟过期
-          messages.push({ role: "assistant", content: response });
-          messages.push({ role: "user", content: `【图片回答】（该图片数据已过期，无法查看）\n\n还需要问什么吗？已经够了就直接回复。` });
+              messages.push({
+                role: "assistant",
+                content: null,
+                tool_calls: [tc],
+              });
+              messages.push({
+                role: "tool",
+                tool_call_id: tc.id,
+                content: toolResult,
+              });
+            } else {
+              // 图片过期
+              messages.push({
+                role: "assistant",
+                content: null,
+                tool_calls: [tc],
+              });
+              messages.push({
+                role: "tool",
+                tool_call_id: tc.id,
+                content: "（该图片数据已过期，无法查看）",
+              });
+            }
+          }
         }
+      } else if (msg?.content) {
+        finalReply = msg.content.trim();
       } else {
-        finalReply = response;
+        break;
       }
     }
 
-    return { finalReply, rounds, messages, visionCalls };
+    return { finalReply, rounds, messages, visionCalls, llmToolArgsSent };
   }
 
   test("单轮图文问答后直接回复", async () => {
-    const { finalReply, visionCalls, rounds } = await runSimulatedDescribeLoop(
+    const { finalReply, visionCalls, rounds } = await runSimulatedVisionLoop(
       [
-        `[DESCRIBE id=${testPhash}]图片里有什么动物？[/DESCRIBE]`,
-        "有两只猫在打架",
+        { type: "tool_call", id: testPhash, question: "图片里有什么动物？" },
+        { type: "content", text: "有两只猫在打架" },
       ],
       ["有两只猫在打架"],
     );
@@ -318,15 +368,15 @@ describe("[DESCRIBE id=xxx] query parsing in agent message loop", () => {
     expect(visionCalls).toHaveLength(1);
     expect(visionCalls[0]).toBe("图片里有什么动物？");
     expect(finalReply).toBe("有两只猫在打架");
-    expect(rounds).toBe(2); // 一轮 describe + 一轮回复
+    expect(rounds).toBe(2);
   });
 
   test("多轮追问后回复", async () => {
-    const { finalReply, visionCalls, rounds } = await runSimulatedDescribeLoop(
+    const { finalReply, visionCalls, rounds } = await runSimulatedVisionLoop(
       [
-        `[DESCRIBE id=${testPhash}]图片里有什么？[/DESCRIBE]`,
-        `[DESCRIBE id=${testPhash}]那只猫是什么颜色的？[/DESCRIBE]`,
-        "是一只橙色猫",
+        { type: "tool_call", id: testPhash, question: "图片里有什么？" },
+        { type: "tool_call", id: testPhash, question: "那只猫是什么颜色的？" },
+        { type: "content", text: "是一只橙色猫" },
       ],
       ["一只猫", "橙色"],
     );
@@ -335,25 +385,25 @@ describe("[DESCRIBE id=xxx] query parsing in agent message loop", () => {
     expect(visionCalls[0]).toBe("图片里有什么？");
     expect(visionCalls[1]).toBe("那只猫是什么颜色的？");
     expect(finalReply).toBe("是一只橙色猫");
-    expect(rounds).toBe(3); // 两轮 describe + 一轮回复
+    expect(rounds).toBe(3);
   });
 
-  test("无 [DESCRIBE] 标签时直接作为最终回复", async () => {
-    const { finalReply, visionCalls, rounds } = await runSimulatedDescribeLoop(
-      ["这张图看起来像是风景照"],
+  test("无 tool_calls 时直接作为最终回复", async () => {
+    const { finalReply, visionCalls, rounds } = await runSimulatedVisionLoop(
+      [{ type: "content", text: "这张图看起来像是风景照" }],
       [],
     );
 
     expect(visionCalls).toHaveLength(0);
     expect(finalReply).toBe("这张图看起来像是风景照");
-    expect(rounds).toBe(1); // 直接回复
+    expect(rounds).toBe(1);
   });
 
   test("视觉模型返回 null（分析失败）时注入占位符文本并继续循环", async () => {
-    const { finalReply, visionCalls, messages, rounds } = await runSimulatedDescribeLoop(
+    const { finalReply, visionCalls, messages, rounds } = await runSimulatedVisionLoop(
       [
-        `[DESCRIBE id=${testPhash}]有什么？[/DESCRIBE]`,
-        "算了我随便回一句",
+        { type: "tool_call", id: testPhash, question: "有什么？" },
+        { type: "content", text: "算了我随便回一句" },
       ],
       [null], // vision returns null
     );
@@ -362,33 +412,34 @@ describe("[DESCRIBE id=xxx] query parsing in agent message loop", () => {
     expect(finalReply).toBe("算了我随便回一句");
     expect(rounds).toBe(2);
 
-    // 验证占位符被注入
-    const answerMsg = messages.find((m) => m.content.includes("(分析失败)"));
-    expect(answerMsg).toBeDefined();
-    expect(answerMsg!.content).toContain("(分析失败)");
+    // 验证占位符被注入（tool 消息的 content）
+    const toolMsg = messages.find((m) => m.role === "tool" && m.content === "(分析失败)");
+    expect(toolMsg).toBeDefined();
   });
 
   test("超过最大轮数（5）时循环终止且无回复", async () => {
-    const { finalReply, rounds } = await runSimulatedDescribeLoop(
-      [`[DESCRIBE id=${testPhash}]第1问？[/DESCRIBE]`,
-       `[DESCRIBE id=${testPhash}]第2问？[/DESCRIBE]`,
-       `[DESCRIBE id=${testPhash}]第3问？[/DESCRIBE]`,
-       `[DESCRIBE id=${testPhash}]第4问？[/DESCRIBE]`,
-       `[DESCRIBE id=${testPhash}]第5问？[/DESCRIBE]`,
-       `[DESCRIBE id=${testPhash}]第6问？[/DESCRIBE]`],
+    const { finalReply, rounds } = await runSimulatedVisionLoop(
+      [
+        { type: "tool_call", id: testPhash, question: "第1问？" },
+        { type: "tool_call", id: testPhash, question: "第2问？" },
+        { type: "tool_call", id: testPhash, question: "第3问？" },
+        { type: "tool_call", id: testPhash, question: "第4问？" },
+        { type: "tool_call", id: testPhash, question: "第5问？" },
+        { type: "tool_call", id: testPhash, question: "第6问？" },
+      ],
       ["答1", "答2", "答3", "答4", "答5"],
-      5, // maxRounds
+      5,
     );
 
-    expect(rounds).toBe(5); // hit max
-    expect(finalReply).toBeNull(); // 没机会回复
+    expect(rounds).toBe(5);
+    expect(finalReply).toBeNull();
   });
 
   test("id 不匹配（图片已过期）时注入过期占位符", async () => {
-    const { finalReply, visionCalls, messages, rounds } = await runSimulatedDescribeLoop(
+    const { finalReply, visionCalls, messages, rounds } = await runSimulatedVisionLoop(
       [
-        `[DESCRIBE id=expired_hash]图片里有什么？[/DESCRIBE]`,
-        "好吧，我不问了",
+        { type: "tool_call", id: "expired_hash", question: "图片里有什么？" },
+        { type: "content", text: "好吧，我不问了" },
       ],
       [],
     );
@@ -398,9 +449,55 @@ describe("[DESCRIBE id=xxx] query parsing in agent message loop", () => {
     expect(rounds).toBe(2);
 
     // 验证过期占位符被注入
-    const answerMsg = messages.find((m) => m.content.includes("该图片数据已过期，无法查看"));
-    expect(answerMsg).toBeDefined();
-    expect(answerMsg!.content).toContain("该图片数据已过期，无法查看");
+    const toolMsg = messages.find(
+      (m) => m.role === "tool" && m.content === "（该图片数据已过期，无法查看）",
+    );
+    expect(toolMsg).toBeDefined();
+  });
+
+  test("LLM 调用携带 tools 参数", async () => {
+    let capturedBody: string | null = null;
+
+    globalThis.fetch = ((url: string | URL | Request, ...args: any[]): Promise<Response> => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+      if (urlStr.includes("/chat/completions")) {
+        const opts = args[0] as RequestInit | undefined;
+        const body = typeof opts?.body === "string" ? JSON.parse(opts.body) : null;
+
+        if (body?.model !== "gemma4:26b") {
+          capturedBody = opts?.body as string;
+          // Return content directly so the loop terminates
+          return Promise.resolve(new Response(
+            JSON.stringify({ choices: [{ message: { content: "直接回复" } }] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ));
+        }
+      }
+      return Promise.resolve(new Response("", { status: 200 }));
+    }) as typeof globalThis.fetch;
+
+    const messages: any[] = [
+      { role: "system", content: "test" },
+      { role: "user", content: "hello" },
+    ];
+
+    const llmRes = await fetch("http://127.0.0.1:11444/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages,
+        tools: [{ type: "function", function: { name: "describe_image" } }],
+      }),
+    });
+
+    expect(capturedBody).not.toBeNull();
+    const parsed = JSON.parse(capturedBody!);
+    expect(parsed.tools).toBeDefined();
+    expect(parsed.tools).toBeInstanceOf(Array);
+    expect(parsed.tools.length).toBeGreaterThanOrEqual(1);
+    expect(parsed.tools[0].type).toBe("function");
+    expect(parsed.tools[0].function.name).toBe("describe_image");
   });
 });
 

@@ -6,8 +6,8 @@
  *
  * 图片消息处理流程（视觉问答循环）：
  *   收到图片 → 计算 pHash → 保存在上下文中显示 [图片 #phash_xxx]
- *   → Agent 用 [DESCRIBE id=phash_xxx]问题[/DESCRIBE] 指定查询某张图
- *   → 系统调用视觉模型 → 答案注入对话 → Agent 可继续追问或直接回复
+ *   → Agent 通过工具调用（describe_image）询问图片内容
+ *   → 系统执行工具调用视觉模型 → 工具结果注入对话 → Agent 可继续追问或直接回复
  *   （每消息最多 5 轮问答）
  *
  * 用法:
@@ -64,6 +64,29 @@ function ensureInferencesDir(): void {
 
 /** 临时图片缓存：pHash → base64 + mime。在单次 onmessage 调用期间有效。 */
 const _imageCache = new Map<string, { base64: string; mime: string }>();
+
+const DESCRIBE_IMAGE_TOOL = {
+  type: "function" as const,
+  function: {
+    name: "describe_image",
+    description:
+      "询问某张图片的内容。图片在上下文中以 [图片 #phash_xxx] 形式出现，用 phash 作为 id 引用它。",
+    parameters: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description: "图片的 phash ID（来自上下文中的 [图片 #phash_xxx]）",
+        },
+        question: {
+          type: "string",
+          description: "你想问这张图片的具体问题",
+        },
+      },
+      required: ["id", "question"],
+    },
+  },
+};
 
 // ── 类型 ────────────────────────────────────────────────
 
@@ -418,7 +441,21 @@ export function buildContextWithPhashIds(
 
 // ── LLM ────────────────────────────────────────────────
 
-async function callLlm(messages: { role: string; content: string }[]): Promise<string> {
+interface ToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+interface LlmResponse {
+  content: string | null;
+  tool_calls: ToolCall[] | null;
+}
+
+async function callLlmWithTools(
+  messages: { role: string; content: string }[],
+  tools?: typeof DESCRIBE_IMAGE_TOOL[],
+): Promise<LlmResponse> {
   const url = `${LLM_BASE_URL.replace(/\/+$/, "")}/chat/completions`;
 
   const headers: Record<string, string> = {
@@ -426,15 +463,20 @@ async function callLlm(messages: { role: string; content: string }[]): Promise<s
   };
   if (LLM_API_KEY) headers["Authorization"] = `Bearer ${LLM_API_KEY}`;
 
+  const body: Record<string, unknown> = {
+    model: LLM_MODEL,
+    messages,
+    max_tokens: 300,
+    temperature: 0.8,
+  };
+  if (tools && tools.length > 0) {
+    body.tools = tools;
+  }
+
   const res = await fetch(url, {
     method: "POST",
     headers,
-    body: JSON.stringify({
-      model: LLM_MODEL,
-      messages,
-      max_tokens: 300,
-      temperature: 0.8,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) {
@@ -442,8 +484,15 @@ async function callLlm(messages: { role: string; content: string }[]): Promise<s
     throw new Error(`LLM ${res.status}: ${body.slice(0, 200)}`);
   }
 
-  const data = (await res.json()) as { choices: { message: { content: string | null } }[] };
-  return data.choices?.[0]?.message?.content?.trim() || "";
+  const data = (await res.json()) as {
+    choices: { message: { content?: string | null; tool_calls?: ToolCall[] | null } }[];
+  };
+  const msg = data.choices?.[0]?.message;
+
+  return {
+    content: msg?.content?.trim() ?? null,
+    tool_calls: msg?.tool_calls ?? null,
+  };
 }
 
 // ── OneBot 发送 ────────────────────────────────────────
@@ -639,7 +688,7 @@ function connect(): void {
       }
 
       // 初始消息列表
-      const messages: { role: string; content: string }[] = [{
+      const messages: any[] = [{
         role: "system",
         content: systemParts.filter(Boolean).join("\n"),
       }, {
@@ -649,39 +698,69 @@ function connect(): void {
           : `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${cleanText}\n\n请以 ${BOT_NAME} 的身份自然回复。`,
       }];
 
-      // 视觉循环：Agent 自主决定问哪张图，可以多轮追问
+      // 视觉循环：Agent 通过 tool calling 询问图片内容，可以多轮追问
       let finalReply: string | null = null;
       let rounds = 0;
 
       while (!finalReply && rounds < 5) {
         rounds++;
-        const response = await callLlm(messages);
+        const tools = (downloadedImg && VISION_MODEL) ? [DESCRIBE_IMAGE_TOOL] : undefined;
+        const result = await callLlmWithTools(messages, tools);
 
-        // 检查是否包含 [DESCRIBE id=xxx] 标签
-        const describeMatch = response.match(/\[DESCRIBE id=([^\]]+)\]([\s\S]*?)\[\/DESCRIBE\]/);
+        if (result.tool_calls && result.tool_calls.length > 0 && VISION_MODEL) {
+          for (const tc of result.tool_calls) {
+            if (tc.function.name === "describe_image") {
+              let args: { id: string; question: string };
+              try {
+                args = JSON.parse(tc.function.arguments);
+              } catch {
+                // 参数解析失败，注入 tool 错误消息
+                const assistantMsg: any = {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [tc],
+                };
+                messages.push(assistantMsg);
+                messages.push({
+                  role: "tool",
+                  tool_call_id: tc.id,
+                  content: "参数解析失败",
+                });
+                continue;
+              }
+              const { id, question } = args;
+              log(`[describe_image id=${id}] ${question.slice(0, 100)}`);
 
-        if (describeMatch && VISION_MODEL) {
-          const id = describeMatch[1].trim();
-          const query = describeMatch[2].trim();
-          log(`[describe id=${id}] ${query.slice(0, 100)}`);
+              const cachedImg = _imageCache.get(id);
+              let toolResult: string;
+              if (cachedImg) {
+                const answer = await callVision(question, cachedImg.base64, cachedImg.mime);
+                toolResult = answer || "(分析失败)";
+                log(`[describe_image a] ${toolResult.slice(0, 100)}`);
+              } else {
+                toolResult = "（该图片数据已过期，无法查看）";
+                log(`[describe_image] image data expired: ${id}`);
+              }
 
-          // 从图片缓存中查找
-          const cachedImg = _imageCache.get(id);
-          if (cachedImg) {
-            const answer = await callVision(query, cachedImg.base64, cachedImg.mime);
-            const displayAnswer = answer || "(分析失败)";
-            log(`[describe a] ${displayAnswer.slice(0, 100)}`);
-
-            messages.push({ role: "assistant", content: response });
-            messages.push({ role: "user", content: `【图片回答】${displayAnswer}\n\n还需要问什么吗？已经够了就直接回复。` });
-          } else {
-            // phash 不在缓存中，说明是历史图片已过期
-            log(`[describe] image data expired: ${id}`);
-            messages.push({ role: "assistant", content: response });
-            messages.push({ role: "user", content: `【图片回答】（该图片数据已过期，无法查看）\n\n还需要问什么吗？已经够了就直接回复。` });
+              // 注入 assistant 消息（包含 tool_calls） + tool 结果
+              const assistantMsg: any = {
+                role: "assistant",
+                content: null,
+                tool_calls: [tc],
+              };
+              messages.push(assistantMsg);
+              messages.push({
+                role: "tool",
+                tool_call_id: tc.id,
+                content: toolResult,
+              });
+            }
           }
+        } else if (result.content) {
+          finalReply = result.content;
         } else {
-          finalReply = response;
+          // 既无 tool_calls 也无 content — 安全退出
+          break;
         }
       }
 
