@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import {
@@ -45,13 +45,8 @@ describe("image-cache (phash-based)", () => {
     const b64 = Buffer.from("test-data").toString("base64");
     saveCachedImage(TEST_PHASH, b64, "image/jpeg");
 
-    // 验证 .jpeg 和 .meta 文件存在
+    // 验证 .jpeg 文件存在
     expect(existsSync(join(TMP_DIR, `${TEST_PHASH}.jpeg`))).toBeTrue();
-    expect(existsSync(join(TMP_DIR, `${TEST_PHASH}.meta`))).toBeTrue();
-
-    // 验证 meta 内容
-    const meta = JSON.parse(readFileSync(join(TMP_DIR, `${TEST_PHASH}.meta`), "utf8"));
-    expect(meta.mime).toBe("image/jpeg");
   });
 
   test("getCachedImage 缓存不存在 → null", () => {
@@ -104,34 +99,6 @@ describe("image-cache (phash-based)", () => {
     const { readdirSync } = await import("node:fs");
     const files = readdirSync(TMP_DIR);
     expect(files.length).toBe(0);
-  });
-
-  test("meta 文件损坏时回退到 ext 推断 mime", async () => {
-    const b64 = Buffer.from("test-data").toString("base64");
-    saveCachedImage(TEST_PHASH, b64, "image/jpeg");
-
-    // 破坏 meta 文件
-    const { writeFileSync } = await import("node:fs");
-    writeFileSync(join(TMP_DIR, `${TEST_PHASH}.meta`), "not-json{", "utf8");
-
-    // 应仍能从 ext 推断 mime
-    const got = getCachedImage(TEST_PHASH);
-    expect(got).not.toBeNull();
-    expect(got!.mime).toBe("image/jpeg");
-    expect(got!.base64).toBe(b64);
-  });
-
-  test("图片文件存在但 meta 缺失 → 回退到 ext 推断", () => {
-    const b64 = Buffer.from("no-meta-data").toString("base64");
-    saveCachedImage(TEST_PHASH, b64, "image/png");
-    // 删除 meta
-    rmSync(join(TMP_DIR, `${TEST_PHASH}.meta`));
-
-    // 应仍能从 .png 文件读取并推断 mime
-    const got = getCachedImage(TEST_PHASH);
-    expect(got).not.toBeNull();
-    expect(got!.mime).toBe("image/png");
-    expect(got!.base64).toBe(b64);
   });
 
   test("setCacheDir 重置后读写新目录", () => {

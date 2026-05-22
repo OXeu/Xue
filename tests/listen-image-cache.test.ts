@@ -59,14 +59,10 @@ test("cacheEntryImage: 图片消息触发缓存写入（phash 文件名）", asy
     const files = readdirSync(tmpDir);
     expect(files.length).toBeGreaterThan(0);
 
-    // 应该有 .png 和 .meta 文件，以 phash 命名（16 字符 hex）
+    // 应该有 .png 文件，以 phash 命名（16 字符 hex）
     const imageFiles = files.filter((f) => f.endsWith(".png"));
     expect(imageFiles.length).toBe(1);
     expect(imageFiles[0]).toMatch(/^[0-9a-f]{16}\.png$/);
-
-    const metaFiles = files.filter((f) => f.endsWith(".meta"));
-    expect(metaFiles.length).toBe(1);
-    expect(metaFiles[0]).toMatch(/^[0-9a-f]{16}\.meta$/);
 
     // 验证 hasCache（用 phash 查询）
     const phash = imageFiles[0].replace(".png", "");

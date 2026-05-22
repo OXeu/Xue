@@ -6,10 +6,9 @@
  *
  * 缓存文件:
  *   data/prod/images/{phash}.{ext}   — 图片文件
- *   data/prod/images/{phash}.meta    — 元数据（mime 类型等，最小化）
  *
  * 文件名即 phash，天然去重。同一张图片无论出现在哪个会话/消息中，
- * 只存一份。
+ * 只存一份。mime 类型从扩展名推断。
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -42,15 +41,7 @@ export function getCachedImage(phash: string): CachedImage | null {
   for (const ext of candidates) {
     const imgPath = join(CACHE_DIR, `${phash}.${ext}`);
     if (existsSync(imgPath)) {
-      // 尝试读取 meta 获取准确的 mime
-      const metaPath = join(CACHE_DIR, `${phash}.meta`);
-      let mime = `image/${ext === "jpg" ? "jpeg" : ext}`;
-      if (existsSync(metaPath)) {
-        try {
-          const meta = JSON.parse(readFileSync(metaPath, "utf8"));
-          if (meta.mime) mime = meta.mime;
-        } catch { /* fallback to ext-based mime */ }
-      }
+      const mime = `image/${ext === "jpg" ? "jpeg" : ext}`;
       const base64 = readFileSync(imgPath, "base64");
       return { base64, mime };
     }
@@ -67,10 +58,6 @@ export function saveCachedImage(phash: string, base64: string, mime: string): vo
   if (existsSync(imgPath)) return; // 已缓存，去重
 
   writeFileSync(imgPath, Buffer.from(base64, "base64"));
-
-  // 最小化元数据
-  const metaPath = join(CACHE_DIR, `${phash}.meta`);
-  writeFileSync(metaPath, JSON.stringify({ mime }), "utf8");
 }
 
 /** 检查某 phash 是否有缓存。 */
