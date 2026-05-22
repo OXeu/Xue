@@ -267,7 +267,7 @@ async function describeImage(
 // ── 上下文 ──────────────────────────────────────────────
 
 /** 从历史消息中提取群聊特征词。读取最近 200 条消息，返回高频关键词概览。 */
-function buildSessionProfile(sessionId: string): string {
+export function buildSessionProfile(sessionId: string): string {
   if (sessionId.startsWith("private_")) return ""; // 私聊不做群特征提取
   const entries = loadRecentMessages(sessionId, 200);
   if (entries.length < 10) return ""; // 数据太少，没有足够信息量
