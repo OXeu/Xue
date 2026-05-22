@@ -146,7 +146,9 @@ function buildContext(entries: ListenEntry[]): string {
       const at = e.atUsers.length > 0 ? ` @${e.atUsers.join(",")}` : "";
       const reply = e.replyTo ? ` (回复 ${e.replyTo})` : "";
       const text = e.text || `[${e.type}]`;
-      return `[${time}] ${name}${at}${reply}: ${text}`;
+      // 上下文中的图片消息加 [图片] 标记，让 Agent 知道群里有图
+      const imgMark = e.segmentTypes?.includes("image") ? " [图片]" : "";
+      return `[${time}] ${name}${at}${reply}: ${text}${imgMark}`;
     })
     .join("\n");
 }
