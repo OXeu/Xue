@@ -65,6 +65,9 @@ function ensureInferencesDir(): void {
 /** 临时图片缓存：pHash → base64 + mime。在单次 onmessage 调用期间有效。 */
 const _imageCache = new Map<string, { base64: string; mime: string }>();
 
+/** pHash → msgId 映射，用于持久化视觉描述时回查 msgId */
+const _phashToMsgId = new Map<string, number>();
+
 const DESCRIBE_IMAGE_TOOL = {
   type: "function" as const,
   function: {
@@ -663,6 +666,7 @@ function connect(): void {
       if (downloadedImg) {
         currentPhash = await computeDHash(downloadedImg.base64, downloadedImg.mime);
         _imageCache.set(currentPhash, downloadedImg);
+        _phashToMsgId.set(currentPhash, entry.msgId);
         // 保存 phash 到 inference 文件，供将来上下文使用
         try {
           ensureInferencesDir();
@@ -712,7 +716,7 @@ function connect(): void {
       }, {
         role: "user",
         content: downloadedImg
-          ? `【群聊上下文】\n${contextText}\n\n【新消息（含图片）】${senderName}: ${cleanText}\n\n请以 ${BOT_NAME} 的身份自然回复。`
+          ? `【群聊上下文】\n${contextText}\n\n【新消息（含图片 #${currentPhash}）】${senderName}: ${cleanText}\n\n请以 ${BOT_NAME} 的身份自然回复。`
           : `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${cleanText}\n\n请以 ${BOT_NAME} 的身份自然回复。`,
       }];
 
@@ -755,6 +759,20 @@ function connect(): void {
                 const answer = await callVision(question, cachedImg.base64, cachedImg.mime);
                 toolResult = answer || "(分析失败)";
                 log(`[describe_image a] ${toolResult.slice(0, 100)}`);
+                // 持久化视觉描述到 inferences 文件，供未来上下文使用
+                if (answer) {
+                  const inferredMsgId = _phashToMsgId.get(id);
+                  if (inferredMsgId) {
+                    try {
+                      ensureInferencesDir();
+                      appendFileSync(
+                        join(_inferencesDir, `${entry.session}.jsonl`),
+                        JSON.stringify({ msgId: inferredMsgId, session: entry.session, phash: id, inference: answer, timestamp: new Date().toISOString() }) + "\n",
+                        "utf8",
+                      );
+                    } catch {}
+                  }
+                }
               } else {
                 toolResult = "（该图片数据已过期，无法查看）";
                 log(`[describe_image] image data expired: ${id}`);

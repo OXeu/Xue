@@ -54,6 +54,9 @@ const INFERENCES_DIR = resolve(import.meta.dirname, "../data/inferences");
 /** 临时图片缓存：pHash → base64 + mime */
 const _imageCache = new Map<string, { base64: string; mime: string }>();
 
+/** pHash → msgId 映射，用于持久化视觉描述时回查 msgId */
+const _phashToMsgId = new Map<string, number>();
+
 const _inferencesDir = resolve(import.meta.dirname, "../data/inferences");
 
 const DESCRIBE_IMAGE_TOOL = {
@@ -564,6 +567,7 @@ async function main(): Promise<void> {
             hasImage = true;
             currentPhash = await computeDHash(downloaded.base64, downloaded.mime);
             _imageCache.set(currentPhash, downloaded);
+            _phashToMsgId.set(currentPhash, e.msgId);
             // 保存 phash 到 inference 文件
             try {
               if (!existsSync(_inferencesDir)) mkdirSync(_inferencesDir, { recursive: true });
@@ -605,7 +609,9 @@ async function main(): Promise<void> {
           { role: "system", content: systemParts.filter(Boolean).join("\n") },
           {
             role: "user",
-            content: `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${cleanText || "[图片]"}\n\n请以 ${BOT_NAME} 的身份自然回复。`,
+            content: hasImage && currentPhash
+            ? `【群聊上下文】\n${contextText}\n\n【新消息（含图片 #${currentPhash}）】${senderName}: ${cleanText || "[图片]"}\n\n请以 ${BOT_NAME} 的身份自然回复。`
+            : `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${cleanText || "[图片]"}\n\n请以 ${BOT_NAME} 的身份自然回复。`,
           },
         ];
 
@@ -642,6 +648,20 @@ async function main(): Promise<void> {
                 if (cachedImg) {
                   const answer = await describeImageFromBase64(question, cachedImg.base64, cachedImg.mime);
                   toolResult = answer || "(分析失败)";
+                  // 持久化视觉描述到 inferences 文件
+                  if (answer) {
+                    const inferredMsgId = _phashToMsgId.get(id);
+                    if (inferredMsgId) {
+                      try {
+                        if (!existsSync(_inferencesDir)) mkdirSync(_inferencesDir, { recursive: true });
+                        appendFileSync(
+                          join(_inferencesDir, `${SESSION}.jsonl`),
+                          JSON.stringify({ msgId: inferredMsgId, session: SESSION, phash: id, inference: answer, timestamp: new Date().toISOString() }) + "\n",
+                          "utf8",
+                        );
+                      } catch {}
+                    }
+                  }
                 } else {
                   toolResult = "（该图片数据已过期，无法查看）";
                 }
