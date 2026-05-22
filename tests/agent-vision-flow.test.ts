@@ -8,7 +8,8 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
-import { resolve } from "node:path";
+import { existsSync, readFileSync, mkdirSync, rmSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 // 设置环境变量后再动态导入，确保 callVision 能读取到
 // 同时禁止 agent.ts 的 main() 入口启动（WS 连接等副作用）
@@ -23,6 +24,14 @@ let callVision: (query: string, base64: string, mime: string) => Promise<string 
 let buildContext: (entries: any[]) => string;
 let buildContextWithInferences: (entries: any[], inferences: Map<number, string>) => string;
 let loadInferenceMap: (session: string) => Map<number, string>;
+let saveVisionInference: (entry: {
+  msgId: number;
+  session: string;
+  inference: string;
+  model: string;
+  timestamp: string;
+}) => void;
+let setInferencesDir: (dir: string) => string;
 
 beforeAll(async () => {
   const mod = await import("../src/agent");
@@ -30,6 +39,8 @@ beforeAll(async () => {
   buildContext = mod.buildContext;
   buildContextWithInferences = mod.buildContextWithInferences;
   loadInferenceMap = mod.loadInferenceMap;
+  saveVisionInference = mod.saveVisionInference;
+  setInferencesDir = mod.setInferencesDir;
 });
 
 // ── 辅助 ────────────────────────────────────────────────
@@ -512,5 +523,87 @@ describe("buildContextWithInferences [图片: 描述]", () => {
     const ctx1 = buildContext([baseEntry]);
     const ctx2 = buildContextWithInferences([baseEntry], new Map());
     expect(ctx1).toBe(ctx2);
+  });
+});
+
+// ── saveVisionInference ────────────────────────────────
+
+describe("saveVisionInference", () => {
+  const tmpDir = join(resolve(import.meta.dirname, ".."), "data", "tmp-test-inferences");
+  let oldDir: string;
+
+  beforeAll(() => {
+    // 清理可能残留的测试目录
+    try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ok */ }
+    oldDir = setInferencesDir(tmpDir);
+  });
+
+  afterAll(() => {
+    setInferencesDir(oldDir);
+    try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ok */ }
+  });
+
+  test("写入文件并可从 loadInferenceMap 读取", () => {
+    saveVisionInference({
+      msgId: 1001,
+      session: "group_test_session",
+      inference: "一只橘色的猫躺在沙发上",
+      model: "gemma4:26b",
+      timestamp: "2026-05-22T12:00:00.000Z",
+    });
+
+    // 验证文件存在
+    const filePath = join(tmpDir, "group_test_session.jsonl");
+    expect(existsSync(filePath)).toBe(true);
+
+    // 验证文件内容
+    const content = readFileSync(filePath, "utf8").trim();
+    const entry = JSON.parse(content);
+    expect(entry.msgId).toBe(1001);
+    expect(entry.session).toBe("group_test_session");
+    expect(entry.inference).toBe("一只橘色的猫躺在沙发上");
+    expect(entry.model).toBe("gemma4:26b");
+    expect(entry.timestamp).toBe("2026-05-22T12:00:00.000Z");
+
+    // 验证 loadInferenceMap 能读取到
+    const map = loadInferenceMap("group_test_session");
+    expect(map.get(1001)).toBe("一只橘色的猫躺在沙发上");
+  });
+
+  test("追加写入不覆盖已有内容", () => {
+    saveVisionInference({
+      msgId: 1002,
+      session: "group_test_session",
+      inference: "一张风景照片",
+      model: "gemma4:26b",
+      timestamp: "2026-05-22T12:01:00.000Z",
+    });
+
+    // 验证两条记录并存
+    const map = loadInferenceMap("group_test_session");
+    expect(map.size).toBe(2);
+    expect(map.get(1001)).toBe("一只橘色的猫躺在沙发上");
+    expect(map.get(1002)).toBe("一张风景照片");
+  });
+
+  test("不同会话写入不同文件", () => {
+    saveVisionInference({
+      msgId: 2001,
+      session: "group_other_session",
+      inference: "一只狗在玩耍",
+      model: "gemma4:26b",
+      timestamp: "2026-05-22T12:02:00.000Z",
+    });
+
+    const map1 = loadInferenceMap("group_test_session");
+    const map2 = loadInferenceMap("group_other_session");
+    expect(map1.has(2001)).toBe(false);
+    expect(map2.get(2001)).toBe("一只狗在玩耍");
+  });
+
+  test("会话不存在时 loadInferenceMap 返回空 map", () => {
+    const map = loadInferenceMap("nonexistent_session");
+    expect(map).toBeInstanceOf(Map);
+    expect(map.size).toBe(0);
   });
 });

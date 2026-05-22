@@ -27,7 +27,7 @@
  *                        http://127.0.0.1:11444/v1 使用本地 Ollama）
  */
 
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { cleanVisionDescription } from "./clean-vision";
 
@@ -54,7 +54,36 @@ const VISION_MODEL = process.env.VISION_MODEL || "";
 const VISION_BASE_URL = (process.env.VISION_BASE_URL || LLM_BASE_URL).replace(/\/+$/, "");
 
 const RAW_DIR = resolve(import.meta.dirname, "../data/raw");
-const INFERENCES_DIR = resolve(import.meta.dirname, "../data/inferences");
+let _inferencesDir = resolve(import.meta.dirname, "../data/inferences");
+
+/** 重设推理结果目录（供测试使用）。返回旧目录以便恢复。 */
+export function setInferencesDir(dir: string): string {
+  const old = _inferencesDir;
+  _inferencesDir = dir;
+  return old;
+}
+
+function ensureInferencesDir(): void {
+  if (!existsSync(_inferencesDir)) mkdirSync(_inferencesDir, { recursive: true });
+}
+
+/** 追加一条视觉问答的推理结果到磁盘。
+ *  格式与 infer-stickers 的 InferenceEntry 兼容（核心字段一致）。
+ *  仅第一次成功回答时调用。 */
+export function saveVisionInference(entry: {
+  msgId: number;
+  session: string;
+  inference: string;
+  model: string;
+  timestamp: string;
+}): void {
+  ensureInferencesDir();
+  appendFileSync(
+    join(_inferencesDir, `${entry.session}.jsonl`),
+    JSON.stringify(entry) + "\n",
+    "utf8",
+  );
+}
 
 // ── 类型 ────────────────────────────────────────────────
 
@@ -349,9 +378,9 @@ function loadRecentMessages(sessionId: string, limit: number): ListenEntry[] {
 }
 
 /** 加载某会话已缓存的推理描述，返回 msgId → inference 映射表。
- *  由 infer-stickers 生成，用于在上下文中显示图片内容。 */
+ *  由 infer-stickers 或在线问答生成，用于在上下文中显示图片内容。 */
 export function loadInferenceMap(session: string): Map<number, string> {
-  const path = resolve(INFERENCES_DIR, `${session}.jsonl`);
+  const path = join(_inferencesDir, `${session}.jsonl`);
   if (!existsSync(path)) return new Map();
 
   const map = new Map<number, string>();
@@ -621,6 +650,7 @@ function connect(): void {
       // 视觉循环：Agent 自主决定问什么，可以多轮追问
       let finalReply: string | null = null;
       let rounds = 0;
+      let firstAnswerSaved = false;
 
       while (!finalReply && rounds < 5) {
         rounds++;
@@ -636,6 +666,23 @@ function connect(): void {
           const answer = await callVision(query, downloadedImg.base64, downloadedImg.mime);
           const displayAnswer = answer || "(分析失败)";
           log(`[vision a] ${displayAnswer.slice(0, 100)}`);
+
+          // 第一次成功回答时，将描述写入推理缓存，供后续上下文使用
+          if (!firstAnswerSaved && answer && !inferenceMap.has(entry.msgId)) {
+            try {
+              saveVisionInference({
+                msgId: entry.msgId,
+                session: entry.session,
+                inference: answer,
+                model: VISION_MODEL,
+                timestamp: new Date().toISOString(),
+              });
+              firstAnswerSaved = true;
+              log(`[vision] saved inference for msgId=${entry.msgId}`);
+            } catch (err) {
+              log(`[vision] failed to save inference: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
 
           messages.push({ role: "assistant", content: response });
           messages.push({ role: "user", content: `【图片回答】${displayAnswer}\n\n还需要问什么吗？已经够了就直接回复。` });
