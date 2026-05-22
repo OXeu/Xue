@@ -365,20 +365,11 @@ function decideReply(
   userId: number, selfId: number, atUsers: number[],
   rawText: string, msgType: string,
 ): ReplyDecision {
+  // replay 模式下回复所有消息（跳过机器人自己的消息）
   if (userId === BOT_QQ || selfId === userId) {
     return { should: false, reason: "self" };
   }
-  const isAtSelf = atUsers.includes(BOT_QQ);
-  const isAtAll = hasAtAll(rawText);
-  const isAtOther = atUsers.length > 0 && !isAtSelf && !isAtAll;
-  const mentioned = stripCqCodes(rawText).toLowerCase().includes(BOT_NAME.toLowerCase());
-
-  if (isAtSelf || isAtAll) return { should: true, reason: isAtSelf ? "at-self" : "at-all" };
-  if (mentioned) return { should: Math.random() < 0.7, reason: "mentioned" };
-  if (msgType === "face" || msgType === "image") return { should: Math.random() < 0.30, reason: "media" };
-  if (isAtOther) return { should: Math.random() < 0.05, reason: "bystander" };
-  // replay 模式下不做随机回复
-  return { should: false, reason: "no-random" };
+  return { should: true, reason: "replay-all" };
 }
 
 function roleInstruction(reason: string): string {
