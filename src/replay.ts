@@ -45,6 +45,7 @@ const SESSION = process.env.SESSION || "group_313214094";
 const MAX_MSGS = process.env.MAX_MSGS ? Number(process.env.MAX_MSGS) : Infinity;
 
 const RAW_DIR = resolve(import.meta.dirname, "../data/raw");
+const INFERENCES_DIR = resolve(import.meta.dirname, "../data/inferences");
 
 // ── 类型 ────────────────────────────────────────────────
 
@@ -135,7 +136,8 @@ function extractKeywords(entries: ListenEntry[], maxTerms: number): string[] {
     .map(([w]) => w);
 }
 
-function buildContext(entries: ListenEntry[]): string {
+function buildContext(entries: ListenEntry[], inferences?: Map<number, string>): string {
+  const inf = inferences ?? new Map();
   if (entries.length === 0) return "（暂无历史消息）";
   return entries
     .map((e) => {
@@ -146,8 +148,16 @@ function buildContext(entries: ListenEntry[]): string {
       const at = e.atUsers.length > 0 ? ` @${e.atUsers.join(",")}` : "";
       const reply = e.replyTo ? ` (回复 ${e.replyTo})` : "";
       const text = e.text || `[${e.type}]`;
-      // 上下文中的图片消息加 [图片] 标记，让 Agent 知道群里有图
-      const imgMark = e.segmentTypes?.includes("image") ? " [图片]" : "";
+      let imgMark = "";
+      if (e.segmentTypes?.includes("image")) {
+        const cached = inf.get(e.msgId);
+        if (cached) {
+          const brief = cached.length > 60 ? cached.slice(0, 60) + "\u2026" : cached;
+          imgMark = ` [图片: ${brief}]`;
+        } else {
+          imgMark = " [图片]";
+        }
+      }
       return `[${time}] ${name}${at}${reply}: ${text}${imgMark}`;
     })
     .join("\n");
@@ -252,6 +262,21 @@ function loadRecentMessages(sessionId: string, limit: number): ListenEntry[] {
   if (!existsSync(path)) return [];
   const lines = readFileSync(path, "utf8").trim().split("\n").filter(Boolean);
   return lines.slice(-limit).map((l) => JSON.parse(l) as ListenEntry);
+}
+
+/** 加载某会话已缓存的推理描述，返回 msgId → inference 映射表。 */
+function loadInferenceMap(session: string): Map<number, string> {
+  const path = resolve(INFERENCES_DIR, `${session}.jsonl`);
+  if (!existsSync(path)) return new Map();
+  const map = new Map<number, string>();
+  const lines = readFileSync(path, "utf8").trim().split("\n").filter(Boolean);
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry.msgId && entry.inference) map.set(entry.msgId, entry.inference);
+    } catch { /* skip */ }
+  }
+  return map;
 }
 
 function ts(): string {
@@ -490,7 +515,8 @@ async function main(): Promise<void> {
 
     // 如果决定回复，调 LLM
     if (decision.should) {
-      const contextText = buildContext(contextEntries);
+      const inferenceMap = loadInferenceMap(SESSION);
+      const contextText = buildContext(contextEntries, inferenceMap);
       const keywords = extractKeywords(contextEntries, 5);
       const topicSummary = keywords.length > 0 ? `当前话题：${keywords.join("、")}` : "";
       const roleInst = roleInstruction(decision.reason, imageDescription ?? undefined);

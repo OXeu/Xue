@@ -21,11 +21,15 @@ beforeAll(() => {
 
 let callVision: (query: string, base64: string, mime: string) => Promise<string | null>;
 let buildContext: (entries: any[]) => string;
+let buildContextWithInferences: (entries: any[], inferences: Map<number, string>) => string;
+let loadInferenceMap: (session: string) => Map<number, string>;
 
 beforeAll(async () => {
   const mod = await import("../src/agent");
   callVision = mod.callVision;
   buildContext = mod.buildContext;
+  buildContextWithInferences = mod.buildContextWithInferences;
+  loadInferenceMap = mod.loadInferenceMap;
 });
 
 // ── 辅助 ────────────────────────────────────────────────
@@ -444,5 +448,69 @@ describe("buildContext [图片] marker", () => {
     }]);
     expect(ctx).toContain("阿黄:");
     expect(ctx).not.toContain("UserA");
+  });
+});
+
+// ── 推理描述注入（[图片: 描述]） ────────────────────────
+
+describe("buildContextWithInferences [图片: 描述]", () => {
+  const baseEntry = {
+    session: "test",
+    msgId: 1,
+    time: 1717000000,
+    type: "text",
+    text: "",
+    userId: 100,
+    nickname: "UserA",
+    card: undefined,
+    subType: "normal",
+    selfId: 1,
+    atUsers: [],
+    replyTo: undefined,
+    segmentTypes: ["image"] as string[],
+  };
+
+  test("有缓存推理时显示 [图片: 描述]", () => {
+    const inf = new Map([[1, "一张猫在沙发上的照片"]]);
+    const ctx = buildContextWithInferences([baseEntry], inf);
+    expect(ctx).toContain("[图片: 一张猫在沙发上的照片]");
+    expect(ctx).not.toContain("[图片]"); // 不应显示纯标记
+  });
+
+  test("无缓存推理时回退到 [图片]", () => {
+    const ctx = buildContextWithInferences([baseEntry], new Map());
+    expect(ctx).toContain("[图片]");
+    expect(ctx).not.toContain("[图片:]");
+  });
+
+  test("非 image 消息不受推理 map 影响", () => {
+    const entry = { ...baseEntry, text: "你好", segmentTypes: ["text"] };
+    const inf = new Map([[1, "一张猫的照片"]]);
+    const ctx = buildContextWithInferences([entry], inf);
+    expect(ctx).toContain("你好");
+    expect(ctx).not.toContain("[图片]");
+    expect(ctx).not.toContain("猫");
+  });
+
+  test("描述超过 60 字时截断加 …", () => {
+    const longDesc = "这是一张非常详细的图片描述，里面包含了很多细节信息，比如一只橘色的猫正躺在灰色的沙发上睡觉，" +
+      "旁边还有一只白色的狗在玩球，窗外可以看到夕阳，房间里有书桌、台灯和几本书";
+    const inf = new Map([[1, longDesc]]);
+    const ctx = buildContextWithInferences([baseEntry], inf);
+    expect(ctx).toContain("[图片: 这是一张非常详细的图片描述，里面包含了很多细节信息，比如一只橘色的猫正躺在灰色的沙发上睡觉，");
+    expect(ctx).toContain("…]");
+    expect(longDesc.length).toBeGreaterThan(60);
+  });
+
+  test("loadInferenceMap 返回空 map 对应不存在的会话", () => {
+    const map = loadInferenceMap("nonexistent_session_12345");
+    expect(map).toBeInstanceOf(Map);
+    expect(map.size).toBe(0);
+  });
+
+  test("buildContext（无参）等效于空推理 map", () => {
+    const ctx1 = buildContext([baseEntry]);
+    const ctx2 = buildContextWithInferences([baseEntry], new Map());
+    expect(ctx1).toBe(ctx2);
   });
 });

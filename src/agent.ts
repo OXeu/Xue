@@ -54,6 +54,7 @@ const VISION_MODEL = process.env.VISION_MODEL || "";
 const VISION_BASE_URL = (process.env.VISION_BASE_URL || LLM_BASE_URL).replace(/\/+$/, "");
 
 const RAW_DIR = resolve(import.meta.dirname, "../data/raw");
+const INFERENCES_DIR = resolve(import.meta.dirname, "../data/inferences");
 
 // ── 类型 ────────────────────────────────────────────────
 
@@ -347,7 +348,35 @@ function loadRecentMessages(sessionId: string, limit: number): ListenEntry[] {
   return lines.slice(-limit).map((l) => JSON.parse(l) as ListenEntry);
 }
 
+/** 加载某会话已缓存的推理描述，返回 msgId → inference 映射表。
+ *  由 infer-stickers 生成，用于在上下文中显示图片内容。 */
+export function loadInferenceMap(session: string): Map<number, string> {
+  const path = resolve(INFERENCES_DIR, `${session}.jsonl`);
+  if (!existsSync(path)) return new Map();
+
+  const map = new Map<number, string>();
+  const lines = readFileSync(path, "utf8").trim().split("\n").filter(Boolean);
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry.msgId && entry.inference) {
+        map.set(entry.msgId, entry.inference);
+      }
+    } catch { /* skip corrupt lines */ }
+  }
+  return map;
+}
+
 export function buildContext(entries: ListenEntry[]): string {
+  return buildContextWithInferences(entries, new Map());
+}
+
+/** 带推理描述注入的上下文构建。
+ *  inferences 可由 loadInferenceMap() 加载，有缓存描述时显示 [图片描述: ...] 而非 [图片]。 */
+export function buildContextWithInferences(
+  entries: ListenEntry[],
+  inferences: Map<number, string>,
+): string {
   if (entries.length === 0) return "（暂无历史消息）";
 
   return entries
@@ -359,8 +388,18 @@ export function buildContext(entries: ListenEntry[]): string {
       const at = e.atUsers.length > 0 ? ` @${e.atUsers.join(",")}` : "";
       const reply = e.replyTo ? ` (回复 ${e.replyTo})` : "";
       const text = e.text || `[${e.type}]`;
-      // 上下文中的图片消息加 [图片] 标记，让 Agent 知道群里有图
-      const imgMark = e.segmentTypes?.includes("image") ? " [图片]" : "";
+      // 上下文中的图片消息：有缓存描述则显示内容，否则显示 [图片]
+      let imgMark = "";
+      if (e.segmentTypes?.includes("image")) {
+        const inf = inferences.get(e.msgId);
+        if (inf) {
+          // 截断过长的描述，保留前 60 字
+          const brief = inf.length > 60 ? inf.slice(0, 60) + "…" : inf;
+          imgMark = ` [图片: ${brief}]`;
+        } else {
+          imgMark = " [图片]";
+        }
+      }
       return `[${time}] ${name}${at}${reply}: ${text}${imgMark}`;
     })
     .join("\n");
@@ -531,9 +570,10 @@ function connect(): void {
       : decideReply(entry, msgType, rawMessage);
     if (!decision.should) return;
 
-    // 加载上下文 + 话题摘要
+    // 加载上下文 + 话题摘要 + 图片推理缓存
     const recent = loadRecentMessages(entry.session, MAX_CONTEXT);
-    const contextText = buildContext(recent);
+    const inferenceMap = loadInferenceMap(entry.session);
+    const contextText = buildContextWithInferences(recent, inferenceMap);
     const keywords = extractKeywords(recent, 5);
     const topicSummary = keywords.length > 0
       ? `当前话题：${keywords.join("、")}`

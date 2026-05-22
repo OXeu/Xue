@@ -26,6 +26,7 @@ const SESSION = process.env.SESSION || "group_313214094";
 const MAX_MSGS = Number(process.env.MAX_MSGS) || 50;
 
 const RAW_DIR = resolve(import.meta.dirname, "../data/raw");
+const INFERENCES_DIR = resolve(import.meta.dirname, "../data/inferences");
 
 // ── 类型 ────────────────────────────────────────────────
 
@@ -111,7 +112,8 @@ function extractKeywords(entries: ListenEntry[], maxTerms: number): string[] {
   return [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, maxTerms).map(([w]) => w);
 }
 
-function buildContext(entries: ListenEntry[]): string {
+function buildContext(entries: ListenEntry[], inferences?: Map<number, string>): string {
+  const inf = inferences ?? new Map();
   if (entries.length === 0) return "（暂无历史消息）";
   return entries.map((e) => {
     const name = e.card || e.nickname;
@@ -121,8 +123,16 @@ function buildContext(entries: ListenEntry[]): string {
     const at = e.atUsers.length > 0 ? ` @${e.atUsers.join(",")}` : "";
     const reply = e.replyTo ? ` (回复 ${e.replyTo})` : "";
     const text = e.text || `[${e.type}]`;
-    // 上下文中的图片消息加 [图片] 标记，让 Agent 知道群里有图
-    const imgMark = e.segmentTypes?.includes("image") ? " [图片]" : "";
+    let imgMark = "";
+    if (e.segmentTypes?.includes("image")) {
+      const cached = inf.get(e.msgId);
+      if (cached) {
+        const brief = cached.length > 60 ? cached.slice(0, 60) + "\u2026" : cached;
+        imgMark = ` [图片: ${brief}]`;
+      } else {
+        imgMark = " [图片]";
+      }
+    }
     return `[${time}] ${name}${at}${reply}: ${text}${imgMark}`;
   }).join("\n");
 }
