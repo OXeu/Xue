@@ -434,14 +434,24 @@ async function describeImageFromBase64(question: string, base64: string, mime: s
 /** 检查描述是否过于模糊，不适合持久化 */
 function isVagueDescription(desc: string): boolean {
   if (!desc || desc.length < 15) return true;
+  // 归一化斜杠分隔
+  const normalized = desc.replace(/[/\\|]/g, " ");
   // 剥离常见模糊前缀，看剩余部分是否仍有信息量
-  const stripped = desc
+  const stripped = normalized
     .replace(/^(an?\s+)?(image|picture|photo|screenshot)\s+(of\s+)?/i, "")
     .replace(/^(a\s+)?single\s+(image|picture|photo)\s+(of\s+)?/i, "")
+    .replace(/^(an?\s+)?(anime|manga)(\s+\w[\w-]*){0,3}\s+(illustration|artwork|character|style)\s*/i, "")
     .replace(/^the\s+user\s+(wants|is|needs|asks|would).*$/i, "")
-    .replace(/^i need to\s+/i, "")
+    .replace(/^i (need|want|would)\s+to\s+(\w+\s+)*this\s+(image|picture|photo)/i, "")
     .trim();
-  return stripped.length < 10;
+  if (stripped.length < 10) return true;
+  // 纯英文情况下进一步检查是否含实质性内容词（非元动词）
+  if (!/[\u4e00-\u9fff]/.test(stripped) &&
+      !/\b(character|person|animal|scene|object|building|landscape|background|figure|color|style|pose|expression|setting|action|creature|plant|text|logo|meme)\b/i.test(stripped)) {
+    // 如果只剩下来去动词（describe/answer/tell/look/see 等），仍视为模糊
+    if (/^(describe|answer|reply|respond|analyze|look|see|tell|explain|check)\b/i.test(stripped)) return true;
+  }
+  return false;
 }
 
 // ── LLM ────────────────────────────────────────────────

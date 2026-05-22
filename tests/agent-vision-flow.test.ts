@@ -679,6 +679,117 @@ describe("buildContext [图片] marker", () => {
   });
 });
 
+// ── isVagueDescription ──────────────────────────────────
+
+describe("isVagueDescription", () => {
+  let isVagueDescription: (desc: string) => boolean;
+
+  beforeAll(async () => {
+    const mod = await import("../src/agent");
+    isVagueDescription = mod.isVagueDescription;
+  });
+
+  // 边界情况
+  test("空字符串 → 视为模糊", () => {
+    expect(isVagueDescription("")).toBe(true);
+  });
+
+  test("null/undefined 安全（类型上不会传，但长度检查兜底）", () => {
+    // undefined 不会发生，但保证不会异常
+    expect(isVagueDescription("")).toBe(true);
+  });
+
+  test("长度 < 15 → 模糊", () => {
+    expect(isVagueDescription("一只猫")).toBe(true);
+    expect(isVagueDescription("A cat.")).toBe(true);
+    expect(isVagueDescription("12345678901234")).toBe(true);
+  });
+
+  // 应通过的描述（有信息量）
+  test("以 'A single image of' 开头但有具体内容 → 通过", () => {
+    const desc = "A single image of a cartoon/anime-style character sitting behind bars";
+    expect(isVagueDescription(desc)).toBe(false);
+  });
+
+  test("以 'An image of' 开头但有具体细节 → 通过", () => {
+    const desc = "An image of a white-haired anime girl with pink eyes wearing a school uniform";
+    expect(isVagueDescription(desc)).toBe(false);
+  });
+
+  test("包含颜色、动作、场景等具体信息 → 通过", () => {
+    const desc = "A cute, chibi-style character with white hair, pink accents, and cat-like ears";
+    expect(isVagueDescription(desc)).toBe(false);
+  });
+
+  test("纯中文详细描述 → 通过", () => {
+    const desc = "图片中有一个白色头发的动漫角色，穿着粉色连衣裙，站在樱花树下";
+    expect(isVagueDescription(desc)).toBe(false);
+  });
+
+  test("描述包含多行但有具体内容 → 通过", () => {
+    const desc = "A screenshot of a mobile game interface showing a battle scene with multiple characters using special attacks";
+    expect(isVagueDescription(desc)).toBe(false);
+  });
+
+  test("短但具体（15~20 字符，有名词）→ 通过", () => {
+    const desc = "橙色猫在沙发上";
+    // 7 字符 < 15，长度不足 → 视为模糊
+    expect(isVagueDescription(desc)).toBe(true);
+  });
+
+  // 应拒绝的描述（模糊/无信息量）
+  test("以 'The user is asking' 开头 → 模糊", () => {
+    const desc = "The user is asking what is in this image without analyzing the question itself";
+    expect(isVagueDescription(desc)).toBe(true);
+  });
+
+  test("以 'The user wants' 开头 → 模糊", () => {
+    const desc = "The user wants to know what is in the image without any analysis of their question";
+    expect(isVagueDescription(desc)).toBe(true);
+  });
+
+  test("'An anime/manga illustration' 且无具体细节 → 模糊", () => {
+    const desc = "An anime/manga illustration";
+    expect(isVagueDescription(desc)).toBe(true);
+  });
+
+  test("'A single image of a picture' 纯堆砌前缀 → 模糊", () => {
+    const desc = "A single image of a picture";
+    expect(isVagueDescription(desc)).toBe(true);
+  });
+
+  test("'I need to describe this image' 无具体内容 → 模糊", () => {
+    const desc = "I need to describe this image";
+    expect(isVagueDescription(desc)).toBe(true);
+  });
+
+  test("'An image of a screenshot' 剥离后有具体类型 → 不模糊", () => {
+    const desc = "An image of a screenshot";
+    // 剥离前缀后剩 "a screenshot"（13 字符），"screenshot" 说明了图片类型
+    expect(isVagueDescription(desc)).toBe(false);
+  });
+
+  test("模版式描述，头尾不匹配 → 模糊", () => {
+    // 以 "An image of" + 无意义词
+    const desc = "An image of the image";
+    // 剥离 "An image of"→ "the image" → 长度 9 < 10 → 模糊
+    expect(isVagueDescription(desc)).toBe(true);
+  });
+
+  test("极短前缀+短后缀刚好在边界上 → 模糊", () => {
+    // 只剥离 "An image of " → "cat" (3 < 10) → 模糊
+    const desc = "An image of cat";
+    expect(isVagueDescription(desc)).toBe(true);
+  });
+
+  test("刚好在边界上（剥离后 10 字符）→ 通过", () => {
+    // 只剥离 "image of " → "1234567890" (10 ≥ 10) → 通过
+    // 但 "image of 1234567890" 总长 17 ≥ 15，剥离后 10 ≥ 10 → 通过
+    const desc = "A image of a cartoon cat with big eyes";
+    expect(isVagueDescription(desc)).toBe(false);
+  });
+});
+
 // ── phash ID 注入（[图片 #phash_xxx]） ──────────────────
 
 describe("buildContextWithPhashIds [图片 #phash_xxx]", () => {
