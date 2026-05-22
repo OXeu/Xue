@@ -589,6 +589,71 @@ describe("describe_image tool calling", () => {
     expect(toolMsg).toBeDefined();
     expect(toolMsg.tool_call_id).toBe("call_bad_json");
   });
+
+  test("_imageCache.get(id) 查到 phash 后将对应 base64/mime 传给 callVision", async () => {
+    // 验证环境准备完好
+    expect(process.env.VISION_MODEL).toBe("gemma4:26b");
+
+    // 模拟 _imageCache：phash → {base64, mime}（生产代码中同一映射）
+    const imageCache = new Map<string, { base64: string; mime: string }>();
+    const testPhashHex = "abcdef1234567890";
+    const testBase64 = "dGVzdC1pbWFnZS1kYXRhLXBvc3Q="; // "test-image-data-post"
+    const testMime = "image/png";
+    imageCache.set(testPhashHex, { base64: testBase64, mime: testMime });
+
+    // 追踪 callVision 的 fetch payload
+    let capturedImageUrl = "";
+    let visionFetchCount = 0;
+
+    globalThis.fetch = ((url: string | URL | Request, ...args: any[]): Promise<Response> => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+
+      // 所有 /chat/completions 调用 — callVision 是唯一的调用者
+      if (urlStr.includes("/chat/completions")) {
+        visionFetchCount++;
+        const opts = args[0] as RequestInit | undefined;
+        const body = typeof opts?.body === "string" ? JSON.parse(opts.body) : null;
+
+        // 捕获图片 URL
+        if (body?.messages?.[0]?.content) {
+          const img = body.messages[0].content.find(
+            (c: any) => c.type === "image_url",
+          );
+          if (img) capturedImageUrl = img.image_url.url;
+        }
+
+        // 注意：cleanVisionDescription 会跳过 < 6 字符的短行，
+        // 所以 mock 回复必须够长以通过 filter
+        const mockContent = "这是一张美丽的风景图，蓝天白云绿树";
+        return Promise.resolve(new Response(
+          JSON.stringify({ choices: [{ message: { content: mockContent } }] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ));
+      }
+
+      return Promise.resolve(new Response("", { status: 200 }));
+    }) as typeof globalThis.fetch;
+
+    // === 模拟生产代码中的 _imageCache.get(id) + callVision ===
+
+    // 1. 模型传入 phash hex 作为 id → 从缓存查找
+    const cachedImg = imageCache.get(testPhashHex);
+    expect(cachedImg).toBeDefined();
+    expect(cachedImg!.base64).toBe(testBase64);
+    expect(cachedImg!.mime).toBe(testMime);
+
+    // 2. 找到后传给 callVision
+    const answer = await callVision("这张图里有什么？", cachedImg!.base64, cachedImg!.mime);
+    expect(visionFetchCount).toBe(1);
+    expect(answer).toBe("这是一张美丽的风景图，蓝天白云绿树");
+
+    // 3. 验证 fetch payload 中的图片数据正确传递
+    expect(capturedImageUrl).toContain(`data:${testMime};base64,${testBase64}`);
+
+    // === 未命中 case ===
+    const missResult = imageCache.get("nonexistent_phash");
+    expect(missResult).toBeUndefined();
+  });
 });
 
 // ── [图片] 标记 in buildContext ──────────────────────────

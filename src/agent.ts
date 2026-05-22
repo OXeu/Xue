@@ -5,7 +5,7 @@
  * 与 listen.ts 互不干扰（各自使用独立的 WS 连接）。
  *
  * 图片消息处理流程（视觉问答循环）：
- *   收到图片 → 计算 pHash → 在上下文中显示 [图片] 标记
+ *   收到图片 → 计算 pHash → 在上下文中显示 [图片#phash] 标记
  *   → Agent 通过工具调用（describe_image）询问图片内容
  *   → 系统执行工具调用视觉模型 → 工具结果注入对话 → Agent 可继续追问或直接回复
  *   （每消息最多 5 轮问答）
@@ -219,13 +219,13 @@ const DESCRIBE_IMAGE_TOOL = {
   function: {
     name: "describe_image",
     description:
-      "询问某张图片的内容。图片 ID（pHash）在消息头中以 #phash_xxx 形式标注。",
+      "询问某张图片的内容。图片 ID（pHash）在消息文本中形如 [图片#phash]，传入 # 后面的 16 位 hex 字符串。",
     parameters: {
       type: "object",
       properties: {
         id: {
           type: "string",
-          description: "图片的 pHash ID（来自消息头中的 #phash_xxx）",
+          description: "图片的 pHash ID（16 位 hex 字符串，来自 [图片#...] 中 # 后面的部分）",
         },
         question: {
           type: "string",
@@ -708,13 +708,11 @@ function connect(): void {
       }
 
       // 初始消息列表
-      const messageText = currentPhash !== null && _recentUserCache !== null && !/\[CQ:image/.test(rawMessage)
-        ? `${cleanText}（之前发的图#${currentPhash}）`
-        : currentPhash !== null
-          ? `${cleanText} [图片#${currentPhash}]`
-          : /\[CQ:image/.test(rawMessage)
-            ? `${cleanText} [图片]`
-            : `${cleanText}`;
+      const messageText = currentPhash !== null
+        ? `${cleanText} [图片#${currentPhash}]`
+        : /\[CQ:image/.test(rawMessage)
+          ? `${cleanText} [图片]`
+          : `${cleanText}`;
       const messages: any[] = [{
         role: "system",
         content: systemParts.filter(Boolean).join("\n"),

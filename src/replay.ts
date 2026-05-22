@@ -3,7 +3,7 @@
  *
  * 不连接 OneBot。从 JSONL 读取旧消息，按时间顺序逐条回放。
  * 图片消息处理采用 tool calling 模式（与 agent.ts 一致）：
- *   收到图片 → 计算 pHash → 在上下文中显示 [图片] 标记
+ *   收到图片 → 计算 pHash → 在上下文中显示 [图片#phash] 标记
  *   → Agent 通过工具调用（describe_image）询问图片内容
  *   → 系统执行工具调用视觉模型 → 工具结果注入对话 → Agent 可继续追问或直接回复
  *   （每消息最多 5 轮问答）
@@ -243,16 +243,16 @@ async function main(): Promise<void> {
       const atmosphereTag = analyzeAtmosphere(ctxEntries);
 
       // 如果是图片消息，下载并缓存（供后续 tool calling 使用），但不预识别
+      let imgPhash: string | null = null;
       if (isImageMsg(e)) {
         let downloaded: { base64: string; mime: string } | null = null;
-        let phash: string | null = null;
 
         // 优先用 entry.phash 查找本地缓存
         if (e.phash?.[0]) {
           const cached = getCachedImage(e.phash[0]);
           if (cached) {
             downloaded = cached;
-            phash = e.phash[0];
+            imgPhash = e.phash[0];
           }
         }
 
@@ -262,27 +262,29 @@ async function main(): Promise<void> {
           if (imgUrl) {
             downloaded = await downloadImage(imgUrl);
             if (downloaded) {
-              phash = await computeDHash(downloaded.base64, downloaded.mime);
+              imgPhash = await computeDHash(downloaded.base64, downloaded.mime);
             }
             // CDN URL 过期 → 尝试本地缓存（listen.ts 可能已缓存）
             if (!downloaded) {
               const cached = getCachedImageByUrl(imgUrl);
               if (cached) {
                 downloaded = cached;
-                phash = getPhashByUrl(imgUrl);
+                imgPhash = getPhashByUrl(imgUrl);
               }
             }
           }
         }
 
-        if (downloaded && phash) {
-          _imageCache.set(phash, downloaded);
+        if (downloaded && imgPhash) {
+          _imageCache.set(imgPhash, downloaded);
         }
       }
 
-      const displayText = isImageMsg(e)
-        ? `${cleanText} [图片]`
-        : cleanText;
+      const displayText = imgPhash
+        ? `${cleanText} [图片#${imgPhash}]`
+        : isImageMsg(e)
+          ? `${cleanText} [图片]`
+          : cleanText;
 
       const quickReply = await quickDecideSilence(ctxText, senderName, displayText, decision.reason, summary, atmosphereTag);
       if (!quickReply || quickReply.toUpperCase() === "SILENT") {
