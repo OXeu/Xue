@@ -13,6 +13,7 @@
     "eval-transformer": "bun src/evaluate-transformer.ts",
     "batch-transform": "bun src/batch-transform.ts",
     "listen": "bun src/listen.ts",
+    "agent": "bun src/agent.ts",
     "start": "bash scripts/start-listen.sh",
     "stop": "bash scripts/stop-listen.sh",
     "status": "bash scripts/status-listen.sh",
