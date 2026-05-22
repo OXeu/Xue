@@ -434,17 +434,14 @@ async function describeImageFromBase64(question: string, base64: string, mime: s
 /** 检查描述是否过于模糊，不适合持久化 */
 function isVagueDescription(desc: string): boolean {
   if (!desc || desc.length < 15) return true;
-  const trimmed = desc.trim().toLowerCase();
-  // 匹配以"一个/一张/一种"开头的极简描述
-  if (/^(an?|a|the|one|some)\s+(image|picture|photo|screenshot|character|anime|manga|illustration|artwork|scene|view|shot)/i.test(trimmed)) return true;
-  // 匹配"a single image of" / "the user is asking" 等无信息量开头
-  if (/^a single/i.test(trimmed)) return true;
-  if (/^the user/i.test(trimmed)) return true;
-  if (/^an anime/i.test(trimmed) && trimmed.length < 25) return true;
-  if (/^i need to/i.test(trimmed)) return true;
-  // 描述中必须含具体内容词（中文或英文名词）
-  if (!/[\u4e00-\u9fff]/.test(desc) && !/\b(character|person|animal|scene|object|building|landscape|text|logo|meme|表情|角色|人物|场景|动物|文字|图片|画面|背景)\b/i.test(desc)) return true;
-  return false;
+  // 剥离常见模糊前缀，看剩余部分是否仍有信息量
+  const stripped = desc
+    .replace(/^(an?\s+)?(image|picture|photo|screenshot)\s+(of\s+)?/i, "")
+    .replace(/^(a\s+)?single\s+(image|picture|photo)\s+(of\s+)?/i, "")
+    .replace(/^the\s+user\s+(wants|is|needs|asks|would).*$/i, "")
+    .replace(/^i need to\s+/i, "")
+    .trim();
+  return stripped.length < 10;
 }
 
 // ── LLM ────────────────────────────────────────────────
