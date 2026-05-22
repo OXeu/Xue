@@ -19,7 +19,7 @@ beforeAll(() => {
 });
 
 let callVision: (query: string, base64: string, mime: string) => Promise<string | null>;
-let buildContext: (entries: any[]) => string;
+let buildContext: (entries: any[], replyMap?: Map<number, { sender: string; text: string }>) => string;
 let computeDHash: (base64: string, mime: string) => Promise<string>;
 let analyzeAtmosphere: (entries: any[]) => string;
 
@@ -672,6 +672,51 @@ describe("buildContext [图片] marker", () => {
     }]);
     expect(ctx).toContain("阿黄:");
     expect(ctx).not.toContain("UserA");
+  });
+
+  // ── replyMap ───────────────────────────────────────────
+
+  const entryReplying = (msgId: number, text: string) => ({
+    ...baseEntry, msgId: 200, text, replyTo: msgId,
+  });
+  const entryPlain = (text: string) => ({
+    ...baseEntry, text, replyTo: undefined,
+  });
+
+  test("replyMap 命中时显示 (回复 发送者 \"原文\")", () => {
+    const map = new Map<number, { sender: string; text: string }>();
+    map.set(99, { sender: "UserA", text: "看不到图，长啥样" });
+    const ctx = buildContext([
+      entryReplying(99, "就是前面发的图"),
+    ], map);
+    expect(ctx).toContain('(回复 UserA "看不到图，长啥样"): 就是前面发的图');
+  });
+
+  test("replyMap 未命中时回退到裸 (回复 msgId)", () => {
+    const map = new Map<number, { sender: string; text: string }>();
+    map.set(88, { sender: "Other", text: "hi" }); // 不包含 99
+    const ctx = buildContext([
+      entryReplying(99, "就是前面发的图"),
+    ], map);
+    expect(ctx).toContain("(回复 99): 就是前面发的图");
+    expect(ctx).not.toContain('"');
+  });
+
+  test("replyMap 为 undefined 时行为不变", () => {
+    const ctx = buildContext([
+      entryReplying(99, "就是前面发的图"),
+    ]); // no map
+    expect(ctx).toContain("(回复 99): 就是前面发的图");
+  });
+
+  test("replyTo 不存在时 replyMap 不影响正常显示", () => {
+    const map = new Map<number, { sender: string; text: string }>();
+    map.set(77, { sender: "UserA", text: "hello" });
+    const ctx = buildContext([
+      entryPlain("这条消息没有引用"),
+    ], map);
+    expect(ctx).toContain("这条消息没有引用");
+    expect(ctx).not.toContain("(回复");
   });
 });
 
