@@ -12,7 +12,8 @@ rin-research-humanize/
 │   ├── agent.ts            # 主 agent：WS 监听 → 上下文 → LLM → 回复
 │   ├── listen.ts           # 消息监听器：记录 JSONL + 异步缓存图片到 test-images/
 │   ├── index-stickers.ts   # 表情包索引器：扫描 data/raw/，记录 msgId/session/type/content
-│   ├── infer-stickers.ts   # 批量推理原型：扫描索引，调用视觉模型推理，结果写入 data/inferences/，含 --reindex 选项
+│   ├── infer-stickers.ts   # 批量推理：扫描索引 → pHash 去重 → 视觉模型推理 → 写入 data/inferences/，含 --reindex
+│   ├── phash.ts            # 感知哈希（dHash），用于不同分辨率下的相似图片去重（阈值 3）
 │   ├── simulate.ts         # 模拟重放：不调 LLM，只输出决策和 prompt，零成本评估
 │   ├── replay.ts           # 重放历史消息：调 LLM 生成实际回复，用于验证
 │   ├── clean-vision.ts     # 清洗视觉模型的 reasoning 输出，提取纯文本描述
@@ -27,6 +28,7 @@ rin-research-humanize/
 │   ├── listen.test.ts
 │   ├── listen-image-cache.test.ts
 │   ├── index-stickers.test.ts
+│   ├── phash.test.ts
 │   └── agent/group-profile.test.ts   # 群聊特征 + 风格分析测试
 ├── data/
 │   ├── raw/                # 监听器 JSONL（运行时生成）
@@ -142,6 +144,8 @@ const ctx5 = getStickerContext(msgId, session, 5);
 
 推理结果持久化到 `data/inferences/{session}.jsonl`，包含完整上下文和模型分析结果。已推理的条目自动跳过，加 `--reindex` 可强制重新推理。
 
+**图片去重**：`infer-stickers` 在调用视觉模型前会计算图片的感知哈希（dHash，`src/phash.ts`），与同一会话已推理的图片对比。汉明距离 ≤ 3 时视为重复，跳过推理。同一张表情包经过不同压缩/分辨率后仍能被识别为重复。
+
 > ⚠ 仅从改动生效后新收到的图片才能成功缓存。已有索引中的旧图片（QQ CDN 链接）大概率已过期，会被静默跳过。
 
 ## 环境变量
@@ -167,10 +171,10 @@ const ctx5 = getStickerContext(msgId, session, 5);
 | `bun run listen` | 前台运行监听器 |
 | `bun run simulate` | 模拟重放（零成本评估 prompt） |
 | `bun run index-stickers` | 扫描并索引表情包到 data/stickers/ |
-| `bun run infer-stickers` | 扫描索引，调用视觉模型推理，结果写入 data/inferences/，含 --reindex 选项 |
+| `bun run infer-stickers` | 扫描索引，pHash 去重后调用视觉模型推理，结果写入 data/inferences/，含 --reindex 选项 |
 | `bun run replay` | 重放历史消息并调 LLM |
 | `bun run start-agent` | 后台启动 agent |
 | `bun run stop-agent` | 停止 agent |
 | `bun run status-agent` | 检查 agent 状态 |
-| `bun test` | 运行测试（91 例） |
+| `bun test` | 运行测试（116 例） |
 | `bun run typecheck` | TypeScript 类型检查 |

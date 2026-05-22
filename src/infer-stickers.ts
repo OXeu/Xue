@@ -4,8 +4,9 @@
  * 读取 data/stickers/ 中的索引条目（type: image），对每条：
  * 1. 优先检查 data/test-images/ 本地缓存
  * 2. 无缓存时尝试从 CDN URL 即时下载
- * 3. 调用视觉模型分析含义
- * 4. 结果写入 data/inferences/{session}.jsonl
+ * 3. 计算感知哈希（dHash），与已推理图片对比去重（汉明距离 ≤ 3 视为重复）
+ * 4. 调用视觉模型分析含义
+ * 5. 结果写入 data/inferences/{session}.jsonl
  *
  * 已推理的条目（msgId）自动跳过，除非传入 --reindex 强制重新推理。
  *
