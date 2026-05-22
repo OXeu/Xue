@@ -1,33 +1,38 @@
 /**
  * replay.ts — 重放历史群聊消息，模拟 agent 回复决策与 LLM 调用
  *
- * 不连接 OneBot。从 JSONL 读取旧消息，按时间顺序逐条回放，
- * 输出每条消息的决策结果和（如果决定回复）LLM 生成的回复。
- *
- * 用于验证改进效果，与 docs/experiment-logs/agent-baseline-before-fix.md 对比。
+ * 不连接 OneBot。从 JSONL 读取旧消息，按时间顺序逐条回放。
+ * 图片消息优先使用 data/test-images/ 中的缓存描述，
+ * 未缓存时从 picsum.photos 用固定种子下载后描述并写入缓存。
  *
  * 用法:
  *   LLM_API_KEY=sk-xxx bun run src/replay.ts
  *
  * 环境变量:
- *   LLM_API_KEY    LLM API Key（必填）
- *   LLM_BASE_URL   API 地址，默认 https://api.deepseek.com/v1
- *   LLM_MODEL      模型名，默认 deepseek-v4-flash
- *   BOT_NAME       机器人名称，默认 Rin
- *   BOT_QQ         Bot QQ 号，默认 3042160393
- *   REPLY_CHANCE   回复概率，默认 0.3
- *   SESSION        目标会话，默认 group_313214094
- *   MAX_MSGS       最多处理 N 条消息（从最新往前），默认全部
+ *   LLM_API_KEY           LLM API Key（必填）
+ *   LLM_BASE_URL          API 地址，默认 https://api.deepseek.com/v1
+ *   LLM_MODEL              模型名，默认 deepseek-v4-flash
+ *   VISION_MODEL           视觉模型名（默认 gemma4:26b）
+ *   VISION_BASE_URL        视觉 API 地址（默认 http://127.0.0.1:11444/v1）
+ *   BOT_NAME               机器人名称，默认 Rin
+ *   BOT_QQ                 Bot QQ 号，默认 3042160393
+ *   REPLY_CHANCE           回复概率，默认 0.3
+ *   SESSION                目标会话，默认 group_313214094
+ *   MAX_MSGS               最多处理 N 条消息（从最新往前），默认全部
  */
 
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { cleanVisionDescription } from "./clean-vision";
+import { getCachedDescription, saveCachedImage } from "./image-cache";
 
 // ── 配置 ────────────────────────────────────────────────
 
 const LLM_API_KEY = process.env.LLM_API_KEY || "";
 const LLM_BASE_URL = (process.env.LLM_BASE_URL || "https://api.deepseek.com/v1").replace(/\/+$/, "");
 const LLM_MODEL = process.env.LLM_MODEL || "deepseek-v4-flash";
+const VISION_MODEL = process.env.VISION_MODEL || "gemma4:26b";
+const VISION_BASE_URL = (process.env.VISION_BASE_URL || "http://127.0.0.1:11444/v1").replace(/\/+$/, "");
 const BOT_NAME = process.env.BOT_NAME || "Rin";
 const BOT_QQ = Number(process.env.BOT_QQ || "3042160393");
 const REPLY_CHANCE = parseFloat(process.env.REPLY_CHANCE || "0.3");
@@ -52,9 +57,11 @@ interface ListenEntry {
   selfId: number;
   atUsers: number[];
   replyTo?: number;
+  segmentTypes?: string[];
+  imageUrls?: string[];
 }
 
-// ── 工具函数（与 agent.ts 一致） ─────────────────────────
+// ── 工具函数 ────────────────────────────────────────────
 
 function parseAtUsers(raw: string): number[] {
   const ids: number[] = [];
@@ -82,6 +89,10 @@ function estimateMsgType(raw: string): "text" | "face" | "image" | "mixed" {
   if (cqTypes.every((t) => t === "face")) return "face";
   if (cqTypes.every((t) => t === "image")) return "image";
   return "mixed";
+}
+
+function isImageMsg(e: ListenEntry): boolean {
+  return e.type === "image" || (e.segmentTypes?.includes("image") ?? false);
 }
 
 const STOPWORDS = new Set([
@@ -165,7 +176,10 @@ function decideReply(
   return { should: Math.random() < REPLY_CHANCE, reason: "random" };
 }
 
-function roleInstruction(reason: string): string {
+function roleInstruction(reason: string, imgDesc?: string): string {
+  if (imgDesc) {
+    return `【消息中包含一张图片，描述如下：${imgDesc}。回复时可以结合图片内容。】`;
+  }
   switch (reason) {
     case "at-self": return `【消息是发给你的，你被直接 @ 了，请以 ${BOT_NAME} 的身份回应。】`;
     case "at-all": return `【消息 @ 了全体成员，也包括你。请像普通群成员一样自然回应。】`;
@@ -174,6 +188,105 @@ function roleInstruction(reason: string): string {
     case "media": return `【这是一个表情/图片消息。你可以简单评价一下，也可以忽略。】`;
     default: return `【你只是群里的普通成员，想回就回，不想回就不回。】`;
   }
+}
+
+// ── 图片描述 ────────────────────────────────────────────
+
+/** 下载图片并 base64 编码 */
+async function downloadImage(url: string): Promise<{ base64: string; mime: string } | null> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return null;
+    const buf = await res.arrayBuffer();
+    const mime = res.headers.get("content-type") || "image/jpeg";
+    return { base64: Buffer.from(buf).toString("base64"), mime };
+  } catch {
+    return null;
+  }
+}
+
+/** 用视觉模型描述图片，返回纯描述文本 */
+async function describeImage(
+  url: string,
+  session: string,
+  msgId: number,
+): Promise<string | null> {
+  // 查缓存
+  const cached = getCachedDescription(session, msgId);
+  if (cached) return cached;
+
+  if (!VISION_MODEL) return null;
+
+  const img = await downloadImage(url);
+  if (!img) return null;
+
+  const dataUri = `data:${img.mime};base64,${img.base64}`;
+
+  try {
+    const res = await fetch(`${VISION_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.LLM_API_KEY || "ollama"}`,
+      },
+      body: JSON.stringify({
+        model: VISION_MODEL,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "用一句话简短描述这张图片的内容" },
+            { type: "image_url", image_url: { url: dataUri } },
+          ],
+        }],
+        max_tokens: 100,
+        temperature: 0.5,
+      }),
+    });
+
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      choices: { message: { content?: string; reasoning?: string } }[];
+    };
+    const msg = json.choices?.[0]?.message;
+
+    const rawReasoning = msg?.reasoning?.trim();
+    if (rawReasoning) {
+      const clean = cleanVisionDescription(rawReasoning);
+      if (clean) {
+        try { saveCachedImage(session, msgId, img.base64, img.mime, clean, url); } catch {}
+        return clean;
+      }
+    }
+    const rawContent = msg?.content?.trim();
+    if (rawContent) {
+      const clean = cleanVisionDescription(rawContent);
+      if (clean) {
+        try { saveCachedImage(session, msgId, img.base64, img.mime, clean, url); } catch {}
+        return clean;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** 获取图片消息的描述：优先用原始 URL，否则用 picsum 固定种子 */
+async function getImageDescription(e: ListenEntry): Promise<string | null> {
+  // 1) 查缓存
+  const cached = getCachedDescription(e.session, e.msgId);
+  if (cached) return cached;
+
+  // 2) 有原始 URL 则用原始 URL
+  if (e.imageUrls && e.imageUrls.length > 0) {
+    return describeImage(e.imageUrls[0], e.session, e.msgId);
+  }
+
+  // 3) 用 picsum 固定种子（保证每次重放相同）
+  const seed = `replay-${e.session}-${e.msgId}`;
+  const fallbackUrl = `https://picsum.photos/seed/${encodeURIComponent(seed)}/400/300`;
+  const desc = await describeImage(fallbackUrl, e.session, e.msgId);
+  return desc;
 }
 
 // ── LLM ────────────────────────────────────────────────
@@ -208,6 +321,7 @@ interface ReplayResult {
   decision: ReplyDecision;
   reply?: string;
   contextSize: number;
+  imageDescription?: string;
 }
 
 async function main(): Promise<void> {
@@ -237,7 +351,7 @@ async function main(): Promise<void> {
     const e = toProcess[i];
     const rawMessage = e.text;
     const cleanText = stripCqCodes(rawMessage);
-    const msgType = estimateMsgType(rawMessage);
+    const msgType = isImageMsg(e) ? "image" : estimateMsgType(rawMessage);
     const atUsers = parseAtUsers(rawMessage);
     const senderName = e.card || e.nickname;
 
@@ -262,12 +376,21 @@ async function main(): Promise<void> {
       contextSize: contextEntries.length,
     };
 
+    // 获取图片描述（仅图片消息）
+    let imageDescription: string | null = null;
+    if (isImageMsg(e) && decision.should) {
+      imageDescription = await getImageDescription(e);
+      if (imageDescription) {
+        result.imageDescription = imageDescription;
+      }
+    }
+
     // 如果决定回复，调 LLM
     if (decision.should) {
       const contextText = buildContext(contextEntries);
       const keywords = extractKeywords(contextEntries, 5);
       const topicSummary = keywords.length > 0 ? `当前话题：${keywords.join("、")}` : "";
-      const roleInst = roleInstruction(decision.reason);
+      const roleInst = roleInstruction(decision.reason, imageDescription ?? undefined);
 
       try {
         const reply = await callLlm([
@@ -283,20 +406,19 @@ async function main(): Promise<void> {
           },
           {
             role: "user",
-            content: `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${cleanText}\n\n请以 ${BOT_NAME} 的身份自然回复。`,
+            content: `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${cleanText || "[图片]"}\n\n请以 ${BOT_NAME} 的身份自然回复。`,
           },
         ]);
         result.reply = reply;
         console.log(`[${result.time}] ${result.sender} [${decision.reason}]`);
-        console.log(`  触发: ${cleanText.slice(0, 60)}`);
+        console.log(`  触发: ${cleanText.slice(0, 60) || "(图片)"}`);
+        if (imageDescription) console.log(`  图片: ${imageDescription.slice(0, 80)}`);
         console.log(`  回复: ${reply.slice(0, 120)}`);
         console.log(`  话题: ${topicSummary || "(无)"}`);
         console.log();
       } catch (err) {
         console.error(`  LLM error: ${err instanceof Error ? err.message : String(err)}`);
       }
-    } else {
-      // 跳过的不打印（太多），除非调试
     }
 
     results.push(result);
@@ -305,12 +427,14 @@ async function main(): Promise<void> {
   // 汇总
   const decided = results.filter((r) => r.decision.should);
   const replied = results.filter((r) => r.reply);
+  const withImg = results.filter((r) => r.imageDescription);
 
   console.log(`─".repeat(40)`);
   console.log(`汇总:`);
   console.log(`  总消息: ${results.length}`);
   console.log(`  决定回复: ${decided.length}`);
   console.log(`  实际回复 (LLM): ${replied.length}`);
+  console.log(`  含图片描述: ${withImg.length}`);
   console.log(`  决策分布:`);
   const dist: Record<string, number> = {};
   for (const d of decided) {

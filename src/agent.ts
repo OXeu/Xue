@@ -25,6 +25,7 @@
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { cleanVisionDescription } from "./clean-vision";
+import { saveCachedImage, getCachedDescription } from "./image-cache";
 
 // ── 配置 ────────────────────────────────────────────────
 
@@ -175,9 +176,20 @@ async function downloadImage(url: string): Promise<{ base64: string; mime: strin
 // 清洗视觉模型的原始输出（实现在 clean-vision.ts）
 // cleanVisionDescription 已通过 import 导入
 
-/** 调用视觉 LLM 描述图片，返回一句话描述，失败返回 null */
-async function describeImage(cqMatch: string): Promise<string | null> {
+/** 调用视觉 LLM 描述图片，返回一句话描述，失败返回 null。
+ *  若传入 session + msgId，会先查缓存，成功描述后也写入缓存。 */
+async function describeImage(
+  cqMatch: string,
+  session?: string,
+  msgId?: number,
+): Promise<string | null> {
   if (!VISION_MODEL) return null;
+
+  // 查缓存（重放场景下直接走缓存，不调视觉模型）
+  if (session && msgId) {
+    const cached = getCachedDescription(session, msgId);
+    if (cached) return cached;
+  }
 
   const url = parseFirstImageUrl(cqMatch);
   if (!url) return null;
@@ -220,13 +232,24 @@ async function describeImage(cqMatch: string): Promise<string | null> {
     const rawReasoning = msg?.reasoning?.trim();
     if (rawReasoning) {
       const clean = cleanVisionDescription(rawReasoning);
-      if (clean) return clean;
+      if (clean) {
+        // 写入缓存供后续 replay 使用
+        if (session && msgId) {
+          try { saveCachedImage(session, msgId, img.base64, img.mime, clean, url); } catch {}
+        }
+        return clean;
+      }
     }
 
     const rawContent = msg?.content?.trim();
     if (rawContent) {
       const clean = cleanVisionDescription(rawContent);
-      if (clean) return clean;
+      if (clean) {
+        if (session && msgId) {
+          try { saveCachedImage(session, msgId, img.base64, img.mime, clean, url); } catch {}
+        }
+        return clean;
+      }
     }
 
     return null;
@@ -427,7 +450,7 @@ function connect(): void {
     // 如果有图片，尝试获取描述
     let imageDescription: string | null = null;
     if (/\[CQ:image/.test(rawMessage)) {
-      imageDescription = await describeImage(rawMessage);
+      imageDescription = await describeImage(rawMessage, entry.session, entry.msgId);
       if (imageDescription) {
         log(`img: ${imageDescription.slice(0, 120)}`);
       }

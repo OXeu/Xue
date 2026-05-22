@@ -74,6 +74,8 @@ interface ListenEntry {
   replyTo?: number;
   /** 原始消息段类型分布（脱敏摘要）。 */
   segmentTypes: string[];
+  /** 图片 URL 列表（如有）。 */
+  imageUrls?: string[];
 }
 
 // ── 路径 ────────────────────────────────────────────────
@@ -99,12 +101,14 @@ function parseMessage(message: string | unknown[]): {
   atUsers: number[];
   replyTo?: number;
   segmentTypes: string[];
+  imageUrls: string[];
 } {
   const result = {
     text: "",
     atUsers: [] as number[],
     replyTo: undefined as number | undefined,
     segmentTypes: [] as string[],
+    imageUrls: [] as string[],
   };
 
   // string 格式：直接作为纯文本
@@ -135,7 +139,12 @@ function parseMessage(message: string | unknown[]): {
           result.replyTo = Number(seg.data.id);
         }
         break;
-      // image / face / forward / mface / … — 只记录类型，不提取内容
+      case "image":
+        if (seg.data?.url) {
+          result.imageUrls.push(String(seg.data.url));
+        }
+        break;
+      // face / forward / mface / … — 只记录类型，不提取内容
     }
   }
 
@@ -247,6 +256,9 @@ function connect(wsUrl: string, accessToken: string): void {
       replyTo: parsed.replyTo,
       segmentTypes: parsed.segmentTypes,
     };
+    if (parsed.imageUrls.length > 0) {
+      entry.imageUrls = parsed.imageUrls;
+    }
 
     // 控制台日志（精简）
     const atInfo = entry.atUsers.length > 0 ? ` @[${entry.atUsers.join(",")}]` : "";

@@ -3,6 +3,9 @@ node_modules
 *.log
 data/
 
+# 但 test-images 是确定性测试 fixture（固定种子），应保留
+!data/test-images/
+
 # 自动生成的运行报告（可随时重新生成）
 docs/raw-summary-*.md
 docs/eval-transformer-*.md
