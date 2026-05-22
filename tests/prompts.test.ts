@@ -42,10 +42,10 @@ test("getReplyRules() 返回 reply.md 的完整内容", () => {
 
 test("getVisionFormat() 返回 Agent 自主提问的指令", () => {
   const content = getVisionFormat();
-  expect(content).toContain("[VISION]");
-  expect(content).toContain("问什么");
-  // 应可直接用作 prompt 片段（不含文档标题）
-  expect(content).not.toContain("#");
+  expect(content).toContain("[DESCRIBE id=phash_xxx]");
+  expect(content).toContain("问");
+  // 应可直接用作 prompt 片段（不含 markdown 标题行）
+  expect(content).not.toMatch(/^# /m);
   // Agent 自主决定问题，不再有固定占位符
   expect(content).not.toContain("{IMAGE_DESCRIPTION}");
 });

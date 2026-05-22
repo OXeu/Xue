@@ -136,8 +136,8 @@ function extractKeywords(entries: ListenEntry[], maxTerms: number): string[] {
     .map(([w]) => w);
 }
 
-function buildContext(entries: ListenEntry[], inferences?: Map<number, string>): string {
-  const inf = inferences ?? new Map();
+function buildContext(entries: ListenEntry[], phashMap?: Map<number, string>): string {
+  const ph = phashMap ?? new Map();
   if (entries.length === 0) return "（暂无历史消息）";
   return entries
     .map((e) => {
@@ -150,10 +150,9 @@ function buildContext(entries: ListenEntry[], inferences?: Map<number, string>):
       const text = e.text || `[${e.type}]`;
       let imgMark = "";
       if (e.segmentTypes?.includes("image")) {
-        const cached = inf.get(e.msgId);
-        if (cached) {
-          const brief = cached.length > 60 ? cached.slice(0, 60) + "\u2026" : cached;
-          imgMark = ` [图片: ${brief}]`;
+        const phash = ph.get(e.msgId);
+        if (phash) {
+          imgMark = ` [图片 #${phash}]`;
         } else {
           imgMark = " [图片]";
         }
@@ -264,8 +263,9 @@ function loadRecentMessages(sessionId: string, limit: number): ListenEntry[] {
   return lines.slice(-limit).map((l) => JSON.parse(l) as ListenEntry);
 }
 
-/** 加载某会话已缓存的推理描述，返回 msgId → inference 映射表。 */
-function loadInferenceMap(session: string): Map<number, string> {
+/** 加载某会话已缓存的 phash 记录，返回 msgId → phash 映射表。
+ *  兼容新旧格式：检测 entry.phash 和 entry.inference 字段。 */
+function loadPhashMap(session: string): Map<number, string> {
   const path = resolve(INFERENCES_DIR, `${session}.jsonl`);
   if (!existsSync(path)) return new Map();
   const map = new Map<number, string>();
@@ -273,7 +273,14 @@ function loadInferenceMap(session: string): Map<number, string> {
   for (const line of lines) {
     try {
       const entry = JSON.parse(line);
-      if (entry.msgId && entry.inference) map.set(entry.msgId, entry.inference);
+      if (entry.msgId) {
+        if (entry.phash) {
+          map.set(entry.msgId, entry.phash);
+        } else if (entry.inference) {
+          // 兼容旧格式：inference 字段作为 phash（老数据）
+          map.set(entry.msgId, entry.inference);
+        }
+      }
     } catch { /* skip */ }
   }
   return map;
@@ -515,8 +522,8 @@ async function main(): Promise<void> {
 
     // 如果决定回复，调 LLM
     if (decision.should) {
-      const inferenceMap = loadInferenceMap(SESSION);
-      const contextText = buildContext(contextEntries, inferenceMap);
+      const phashMap = loadPhashMap(SESSION);
+      const contextText = buildContext(contextEntries, phashMap);
       const keywords = extractKeywords(contextEntries, 5);
       const topicSummary = keywords.length > 0 ? `当前话题：${keywords.join("、")}` : "";
       const roleInst = roleInstruction(decision.reason, imageDescription ?? undefined);

@@ -112,8 +112,8 @@ function extractKeywords(entries: ListenEntry[], maxTerms: number): string[] {
   return [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, maxTerms).map(([w]) => w);
 }
 
-function buildContext(entries: ListenEntry[], inferences?: Map<number, string>): string {
-  const inf = inferences ?? new Map();
+function buildContext(entries: ListenEntry[], phashMap?: Map<number, string>): string {
+  const ph = phashMap ?? new Map();
   if (entries.length === 0) return "（暂无历史消息）";
   return entries.map((e) => {
     const name = e.card || e.nickname;
@@ -125,10 +125,9 @@ function buildContext(entries: ListenEntry[], inferences?: Map<number, string>):
     const text = e.text || `[${e.type}]`;
     let imgMark = "";
     if (e.segmentTypes?.includes("image")) {
-      const cached = inf.get(e.msgId);
-      if (cached) {
-        const brief = cached.length > 60 ? cached.slice(0, 60) + "\u2026" : cached;
-        imgMark = ` [图片: ${brief}]`;
+      const phash = ph.get(e.msgId);
+      if (phash) {
+        imgMark = ` [图片 #${phash}]`;
       } else {
         imgMark = " [图片]";
       }

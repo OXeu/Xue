@@ -5,7 +5,8 @@
  * 与 listen.ts 互不干扰（各自使用独立的 WS 连接）。
  *
  * 图片消息处理流程（视觉问答循环）：
- *   收到图片 → 系统提示 Agent 可自主提问 → Agent 输出 [VISION]问题[/VISION]
+ *   收到图片 → 计算 pHash → 保存在上下文中显示 [图片 #phash_xxx]
+ *   → Agent 用 [DESCRIBE id=phash_xxx]问题[/DESCRIBE] 指定查询某张图
  *   → 系统调用视觉模型 → 答案注入对话 → Agent 可继续追问或直接回复
  *   （每消息最多 5 轮问答）
  *
@@ -29,6 +30,7 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { computeDHash } from "./phash";
 import { cleanVisionDescription } from "./clean-vision";
 
 import {
@@ -56,34 +58,12 @@ const VISION_BASE_URL = (process.env.VISION_BASE_URL || LLM_BASE_URL).replace(/\
 const RAW_DIR = resolve(import.meta.dirname, "../data/raw");
 let _inferencesDir = resolve(import.meta.dirname, "../data/inferences");
 
-/** 重设推理结果目录（供测试使用）。返回旧目录以便恢复。 */
-export function setInferencesDir(dir: string): string {
-  const old = _inferencesDir;
-  _inferencesDir = dir;
-  return old;
-}
-
 function ensureInferencesDir(): void {
   if (!existsSync(_inferencesDir)) mkdirSync(_inferencesDir, { recursive: true });
 }
 
-/** 追加一条视觉问答的推理结果到磁盘。
- *  格式与 infer-stickers 的 InferenceEntry 兼容（核心字段一致）。
- *  仅第一次成功回答时调用。 */
-export function saveVisionInference(entry: {
-  msgId: number;
-  session: string;
-  inference: string;
-  model: string;
-  timestamp: string;
-}): void {
-  ensureInferencesDir();
-  appendFileSync(
-    join(_inferencesDir, `${entry.session}.jsonl`),
-    JSON.stringify(entry) + "\n",
-    "utf8",
-  );
-}
+/** 临时图片缓存：pHash → base64 + mime。在单次 onmessage 调用期间有效。 */
+const _imageCache = new Map<string, { base64: string; mime: string }>();
 
 // ── 类型 ────────────────────────────────────────────────
 
@@ -377,9 +357,9 @@ function loadRecentMessages(sessionId: string, limit: number): ListenEntry[] {
   return lines.slice(-limit).map((l) => JSON.parse(l) as ListenEntry);
 }
 
-/** 加载某会话已缓存的推理描述，返回 msgId → inference 映射表。
- *  由 infer-stickers 或在线问答生成，用于在上下文中显示图片内容。 */
-export function loadInferenceMap(session: string): Map<number, string> {
+/** 加载某会话已缓存的图片 phash 记录，返回 msgId → phash 映射表。
+ *  兼容新旧格式：检测 entry.phash 和 entry.inference 字段。 */
+export function loadPhashMap(session: string): Map<number, string> {
   const path = join(_inferencesDir, `${session}.jsonl`);
   if (!existsSync(path)) return new Map();
 
@@ -388,8 +368,13 @@ export function loadInferenceMap(session: string): Map<number, string> {
   for (const line of lines) {
     try {
       const entry = JSON.parse(line);
-      if (entry.msgId && entry.inference) {
-        map.set(entry.msgId, entry.inference);
+      if (entry.msgId) {
+        if (entry.phash) {
+          map.set(entry.msgId, entry.phash);
+        } else if (entry.inference) {
+          // 兼容旧格式：inference 字段作为 phash（老数据）
+          map.set(entry.msgId, entry.inference);
+        }
       }
     } catch { /* skip corrupt lines */ }
   }
@@ -397,14 +382,14 @@ export function loadInferenceMap(session: string): Map<number, string> {
 }
 
 export function buildContext(entries: ListenEntry[]): string {
-  return buildContextWithInferences(entries, new Map());
+  return buildContextWithPhashIds(entries, new Map());
 }
 
-/** 带推理描述注入的上下文构建。
- *  inferences 可由 loadInferenceMap() 加载，有缓存描述时显示 [图片描述: ...] 而非 [图片]。 */
-export function buildContextWithInferences(
+/** 带 phash ID 注入的上下文构建。
+ *  phashMap 可由 loadPhashMap() 加载，有 phash 时显示 [图片 #phash_xxx] 而非纯 [图片]。 */
+export function buildContextWithPhashIds(
   entries: ListenEntry[],
-  inferences: Map<number, string>,
+  phashMap: Map<number, string>,
 ): string {
   if (entries.length === 0) return "（暂无历史消息）";
 
@@ -417,14 +402,11 @@ export function buildContextWithInferences(
       const at = e.atUsers.length > 0 ? ` @${e.atUsers.join(",")}` : "";
       const reply = e.replyTo ? ` (回复 ${e.replyTo})` : "";
       const text = e.text || `[${e.type}]`;
-      // 上下文中的图片消息：有缓存描述则显示内容，否则显示 [图片]
       let imgMark = "";
       if (e.segmentTypes?.includes("image")) {
-        const inf = inferences.get(e.msgId);
-        if (inf) {
-          // 截断过长的描述，保留前 60 字
-          const brief = inf.length > 60 ? inf.slice(0, 60) + "…" : inf;
-          imgMark = ` [图片: ${brief}]`;
+        const phash = phashMap.get(e.msgId);
+        if (phash) {
+          imgMark = ` [图片 #${phash}]`;
         } else {
           imgMark = " [图片]";
         }
@@ -567,6 +549,9 @@ function connect(): void {
     // 处理 group 和 private 两种消息类型
     if (data.post_type !== "message" || (data.message_type !== "group" && data.message_type !== "private")) return;
 
+    // 每次消息处理开始时清空图片缓存
+    _imageCache.clear();
+
     const isPrivate = data.message_type === "private";
     const sessionId = isPrivate ? `private_${data.user_id}` : `group_${data.group_id}`;
     const userId = data.user_id as number;
@@ -599,10 +584,37 @@ function connect(): void {
       : decideReply(entry, msgType, rawMessage);
     if (!decision.should) return;
 
-    // 加载上下文 + 话题摘要 + 图片推理缓存
+    const senderName = entry.card || entry.nickname;
+    log(`msg <${senderName}> in ${entry.session} [${decision.reason}]: ${cleanText.slice(0, 80)}`);
+
+    // 如果有图片，先下载图片（后续由 Agent 自主决定问什么）
+    let downloadedImg: { base64: string; mime: string } | null = null;
+    let currentPhash: string | null = null;
+    if (/\[CQ:image/.test(rawMessage)) {
+      const imgUrl = parseFirstImageUrl(rawMessage);
+      if (imgUrl) downloadedImg = await downloadImage(imgUrl);
+      if (downloadedImg) {
+        currentPhash = await computeDHash(downloadedImg.base64, downloadedImg.mime);
+        _imageCache.set(currentPhash, downloadedImg);
+        // 保存 phash 到 inference 文件，供将来上下文使用
+        try {
+          ensureInferencesDir();
+          appendFileSync(
+            join(_inferencesDir, `${entry.session}.jsonl`),
+            JSON.stringify({ msgId: entry.msgId, session: entry.session, phash: currentPhash, timestamp: new Date().toISOString() }) + "\n",
+            "utf8",
+          );
+        } catch {}
+      }
+    }
+
+    // 加载上下文 + 话题摘要 + 图片 phash 映射
     const recent = loadRecentMessages(entry.session, MAX_CONTEXT);
-    const inferenceMap = loadInferenceMap(entry.session);
-    const contextText = buildContextWithInferences(recent, inferenceMap);
+    const phashMap = loadPhashMap(entry.session);
+    if (currentPhash) {
+      phashMap.set(entry.msgId, currentPhash); // 确保当前图片在内存 map 中
+    }
+    const contextText = buildContextWithPhashIds(recent, phashMap);
     const keywords = extractKeywords(recent, 5);
     const topicSummary = keywords.length > 0
       ? `当前话题：${keywords.join("、")}`
@@ -610,16 +622,6 @@ function connect(): void {
 
     const scenarioKey = isPrivate ? "private" : decision.reason;
     const roleInstruction = `【${getScenarioPrompt(scenarioKey, BOT_NAME)}】`;
-
-    const senderName = entry.card || entry.nickname;
-    log(`msg <${senderName}> in ${entry.session} [${decision.reason}]: ${cleanText.slice(0, 80)}`);
-
-    // 如果有图片，先下载图片（后续由 Agent 自主决定问什么）
-    let downloadedImg: { base64: string; mime: string } | null = null;
-    if (/\[CQ:image/.test(rawMessage)) {
-      const imgUrl = parseFirstImageUrl(rawMessage);
-      if (imgUrl) downloadedImg = await downloadImage(imgUrl);
-    }
 
     try {
       // 构造系统提示
@@ -647,45 +649,37 @@ function connect(): void {
           : `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${cleanText}\n\n请以 ${BOT_NAME} 的身份自然回复。`,
       }];
 
-      // 视觉循环：Agent 自主决定问什么，可以多轮追问
+      // 视觉循环：Agent 自主决定问哪张图，可以多轮追问
       let finalReply: string | null = null;
       let rounds = 0;
-      let firstAnswerSaved = false;
 
       while (!finalReply && rounds < 5) {
         rounds++;
         const response = await callLlm(messages);
 
-        // 检查是否包含视觉提问
-        const visionMatch = response.match(/\[VISION\]([\s\S]*?)\[\/VISION\]/);
+        // 检查是否包含 [DESCRIBE id=xxx] 标签
+        const describeMatch = response.match(/\[DESCRIBE id=([^\]]+)\]([\s\S]*?)\[\/DESCRIBE\]/);
 
-        if (visionMatch && downloadedImg && VISION_MODEL) {
-          const query = visionMatch[1].trim();
-          log(`[vision q] ${query.slice(0, 100)}`);
+        if (describeMatch && VISION_MODEL) {
+          const id = describeMatch[1].trim();
+          const query = describeMatch[2].trim();
+          log(`[describe id=${id}] ${query.slice(0, 100)}`);
 
-          const answer = await callVision(query, downloadedImg.base64, downloadedImg.mime);
-          const displayAnswer = answer || "(分析失败)";
-          log(`[vision a] ${displayAnswer.slice(0, 100)}`);
+          // 从图片缓存中查找
+          const cachedImg = _imageCache.get(id);
+          if (cachedImg) {
+            const answer = await callVision(query, cachedImg.base64, cachedImg.mime);
+            const displayAnswer = answer || "(分析失败)";
+            log(`[describe a] ${displayAnswer.slice(0, 100)}`);
 
-          // 第一次成功回答时，将描述写入推理缓存，供后续上下文使用
-          if (!firstAnswerSaved && answer && !inferenceMap.has(entry.msgId)) {
-            try {
-              saveVisionInference({
-                msgId: entry.msgId,
-                session: entry.session,
-                inference: answer,
-                model: VISION_MODEL,
-                timestamp: new Date().toISOString(),
-              });
-              firstAnswerSaved = true;
-              log(`[vision] saved inference for msgId=${entry.msgId}`);
-            } catch (err) {
-              log(`[vision] failed to save inference: ${err instanceof Error ? err.message : String(err)}`);
-            }
+            messages.push({ role: "assistant", content: response });
+            messages.push({ role: "user", content: `【图片回答】${displayAnswer}\n\n还需要问什么吗？已经够了就直接回复。` });
+          } else {
+            // phash 不在缓存中，说明是历史图片已过期
+            log(`[describe] image data expired: ${id}`);
+            messages.push({ role: "assistant", content: response });
+            messages.push({ role: "user", content: `【图片回答】（该图片数据已过期，无法查看）\n\n还需要问什么吗？已经够了就直接回复。` });
           }
-
-          messages.push({ role: "assistant", content: response });
-          messages.push({ role: "user", content: `【图片回答】${displayAnswer}\n\n还需要问什么吗？已经够了就直接回复。` });
         } else {
           finalReply = response;
         }
