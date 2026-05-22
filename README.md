@@ -25,6 +25,7 @@ rin-research-humanize/
 │   ├── clean-vision.test.ts
 │   ├── image-cache.test.ts
 │   ├── listen.test.ts
+│   ├── listen-image-cache.test.ts
 │   ├── index-stickers.test.ts
 │   └── agent/group-profile.test.ts   # 群聊特征 + 风格分析测试
 ├── data/
@@ -166,5 +167,5 @@ const ctx5 = getStickerContext(msgId, session, 5);
 | `bun run start-agent` | 后台启动 agent |
 | `bun run stop-agent` | 停止 agent |
 | `bun run status-agent` | 检查 agent 状态 |
-| `bun test` | 运行测试（87 例） |
+| `bun test` | 运行测试（91 例） |
 | `bun run typecheck` | TypeScript 类型检查 |

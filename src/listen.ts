@@ -193,8 +193,9 @@ function ts(): string {
 
 // ── 图片缓存 ────────────────────────────────────────────
 
-/** 下载图片到本地缓存（不阻塞消息处理）。如果已缓存或下载失败，静默跳过。 */
-async function cacheEntryImage(url: string, session: string, msgId: number): Promise<void> {
+/** 下载图片到本地缓存（不阻塞消息处理）。如果已缓存或下载失败，静默跳过。
+ *  导出供测试使用。 */
+export async function cacheEntryImage(url: string, session: string, msgId: number): Promise<void> {
   if (hasCache(session, msgId)) return;
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
@@ -202,7 +203,7 @@ async function cacheEntryImage(url: string, session: string, msgId: number): Pro
     const buf = await res.arrayBuffer();
     const mime = res.headers.get("content-type") || "image/jpeg";
     const base64 = Buffer.from(buf).toString("base64");
-    saveCachedImage(session, msgId, base64, mime, "", url);
+    saveCachedImage(session, msgId, base64, mime, "(pending)", url);
     console.log(`[${ts()}] [cache] cached image for ${session}_${msgId}`);
   } catch {
     // 下载失败不阻塞消息处理
