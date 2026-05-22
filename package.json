@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "collect-baseline": "bun src/collect-baseline.ts",
+    "analyze-baseline": "bun src/analyze-baseline.ts",
     "listen": "bun src/listen.ts",
     "lint": "echo 'TODO'"
   },
