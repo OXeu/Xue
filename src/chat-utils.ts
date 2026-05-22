@@ -253,7 +253,8 @@ export function isVagueDescription(desc: string): boolean {
 // ── 快速沉默决策 ────────────────────────────────────
 
 /** 对低确定性触发（random/bystander/media），先问模型有没有话想说。
- *  返回 SILENT 或模型生成的简短回复。 */
+ *  返回 SILENT 或模型生成的简短回复。
+ *  continuationHint — 当消息来自 bot 刚回复过的人时传入，模型可据此判断是否为对话延续。 */
 export async function quickDecideSilence(
   contextText: string,
   senderName: string,
@@ -261,6 +262,7 @@ export async function quickDecideSilence(
   scenarioKey: string,
   topicSummary: string,
   atmosphereTag: string,
+  continuationHint?: string,
 ): Promise<string | null> {
   const url = `${LLM_BASE_URL.replace(/\/+$/, "")}/chat/completions`;
   const scenarioPrompt = getScenarioPrompt(scenarioKey, BOT_NAME);
@@ -275,7 +277,8 @@ export async function quickDecideSilence(
   ].filter(Boolean).join("\n");
 
   try {
-    const userMsg = getSilenceCheckPrompt(contextText, senderName, messageText);
+    const userMsg = getSilenceCheckPrompt(contextText, senderName, messageText) +
+      (continuationHint ? `\n\n${continuationHint}` : "");
     const res = await fetch(url, {
       method: "POST",
       headers: {

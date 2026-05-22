@@ -566,10 +566,14 @@ function connect(): void {
 
     const scenarioKey = isPrivate ? "private" : decision.reason;
 
+    // 检查对话延续：bot 刚回复过此人，生成 hint 供沉默检查参考
+    let continuationHint = "";
+    if (isConversationContinuation(entry.userId, entry.session)) {
+      continuationHint = `（你刚才回复过 ${senderName}，这可能是对刚才对话的继续）`;
+    }
+
     // 低确定性触发：先做快速沉默检查，但附带图片描述（如有）
-    // 对话延续（bot 刚回复过此人）跳过沉默检查，直接进入完整流程
-    const lowCertainty = !isConversationContinuation(entry.userId, entry.session)
-      && (scenarioKey === "random" || scenarioKey === "bystander" || scenarioKey === "media");
+    const lowCertainty = scenarioKey === "random" || scenarioKey === "bystander" || scenarioKey === "media";
     if (lowCertainty) {
       // 如果消息包含图片，先下载并做单轮视觉描述
       let imageDesc = "";
@@ -595,7 +599,7 @@ function connect(): void {
         : cleanText;
 
       const quickReply = await quickDecideSilence(
-        contextText, senderName, displayText, scenarioKey, topicSummary, atmosphereTag,
+        contextText, senderName, displayText, scenarioKey, topicSummary, atmosphereTag, continuationHint,
       );
       if (!quickReply || quickReply.toUpperCase() === "SILENT") {
         log(`silent (model chose not to speak)`);
