@@ -1,7 +1,7 @@
 /**
  * image-cache.ts — 图片缓存管理
  *
- * 将从 CDN 下载的图片和描述元数据持久化到 data/images/，
+ * 将从 CDN 下载的图片和描述元数据持久化到 data/prod/images/，
  * 供 infer-stickers 和 replay 时复用，避免重复下载或重复调用视觉模型。
  *
  * 缓存文件:
@@ -12,7 +12,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-let CACHE_DIR = resolve(import.meta.dirname, "../data/images");
+let CACHE_DIR = resolve(import.meta.dirname, "../data/prod/images");
 
 /** 重设缓存目录（供测试使用）。返回旧目录以便恢复。 */
 export function setCacheDir(dir: string): string {

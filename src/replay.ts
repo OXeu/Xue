@@ -48,13 +48,13 @@ const REPLY_CHANCE = parseFloat(process.env.REPLY_CHANCE || "0.3");
 const SESSION = process.env.SESSION || "group_313214094";
 const MAX_MSGS = process.env.MAX_MSGS ? Number(process.env.MAX_MSGS) : Infinity;
 
-const RAW_DIR = resolve(import.meta.dirname, "../data/raw");
-const INFERENCES_DIR = resolve(import.meta.dirname, "../data/inferences");
+const RAW_DIR = resolve(import.meta.dirname, "../data/prod/raw");
+const INFERENCES_DIR = resolve(import.meta.dirname, "../data/prod/inferences");
 
 /** 临时图片缓存：pHash → base64 + mime */
 const _imageCache = new Map<string, { base64: string; mime: string }>();
 
-const _inferencesDir = resolve(import.meta.dirname, "../data/inferences");
+const _inferencesDir = resolve(import.meta.dirname, "../data/prod/inferences");
 
 const DESCRIBE_IMAGE_TOOL = {
   type: "function" as const,
@@ -330,7 +330,7 @@ function loadPhashMap(session: string): Map<number, string> {
   return map;
 }
 
-/** 从 data/inferences/{session}.jsonl 中查找某个 msgId 的缓存视觉描述。
+/** 从 data/prod/inferences/{session}.jsonl 中查找某个 msgId 的缓存视觉描述。
  *  当图片下载失败时，用此兜底。 */
 export function loadCachedInference(session: string, msgId: number): string | null {
   const path = resolve(INFERENCES_DIR, `${session}.jsonl`);
@@ -661,7 +661,7 @@ async function main(): Promise<void> {
             } catch {}
             phashMap.set(e.msgId, currentPhash);
           } else {
-            // 下载失败，查 data/inferences 中是否有缓存描述
+            // 下载失败，查 data/prod/inferences 中是否有缓存描述
             cachedDescription = loadCachedInference(SESSION, e.msgId);
           }
         }

@@ -1,7 +1,7 @@
 /**
  * tests/replay-cached-inference.test.ts — 验证 replay.ts 中图片下载失败时的缓存描述兜底逻辑
  *
- * loadCachedInference 从 data/inferences/{session}.jsonl 中查找指定 msgId 的缓存视觉描述。
+ * loadCachedInference 从 data/prod/inferences/{session}.jsonl 中查找指定 msgId 的缓存视觉描述。
  * 测试覆盖：有缓存、无缓存、会话不存在三种场景。
  */
 
@@ -11,7 +11,7 @@ import { join, resolve } from "node:path";
 
 let loadCachedInference: (session: string, msgId: number) => string | null;
 
-const INFERENCES_DIR = resolve(import.meta.dirname, "..", "data", "inferences");
+const INFERENCES_DIR = resolve(import.meta.dirname, "..", "data/prod", "inferences");
 
 beforeAll(async () => {
   const mod = await import("../src/replay");

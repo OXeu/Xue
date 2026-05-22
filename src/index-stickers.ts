@@ -1,9 +1,9 @@
 /**
- * index-stickers.ts — 从 data/raw/ 扫描消息，提取表情包/图片消息并建立索引。
+ * index-stickers.ts — 从 data/prod/raw/ 扫描消息，提取表情包/图片消息并建立索引。
  *
- * 索引文件（data/stickers/{session}.jsonl）每条记录只存：
+ * 索引文件（data/prod/stickers/{session}.jsonl）每条记录只存：
  * - 消息 ID、会话、发送者、类型（image/face）、内容（URL 或 face ID）
- * - 不含上下文——context 在需要时通过 getStickerContext() 从 data/raw/ 反查
+ * - 不含上下文——context 在需要时通过 getStickerContext() 从 data/prod/raw/ 反查
  *
  * 用法:
  *   bun run src/index-stickers.ts                     # 全量索引
@@ -15,8 +15,8 @@
 import { existsSync, mkdirSync, readFileSync, appendFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-const RAW_DIR = resolve(import.meta.dirname, "../data/raw");
-const STICKERS_DIR = resolve(import.meta.dirname, "../data/stickers");
+const RAW_DIR = resolve(import.meta.dirname, "../data/prod/raw");
+const STICKERS_DIR = resolve(import.meta.dirname, "../data/prod/stickers");
 
 export interface RawEntry {
   session: string;
@@ -98,8 +98,8 @@ export function extractContent(e: RawEntry): { type: "image" | "face"; content: 
 
 /**
  * 索引一个会话的表情包消息。
- * @param options.rawDir 覆盖 raw 目录（默认 data/raw）
- * @param options.stickersDir 覆盖 stickers 目录（默认 data/stickers）
+ * @param options.rawDir 覆盖 raw 目录（默认 data/prod/raw）
+ * @param options.stickersDir 覆盖 stickers 目录（default data/prod/stickers）
  */
 export function indexSession(
   session: string,
@@ -155,7 +155,7 @@ export function indexSession(
 }
 
 /**
- * 从 data/raw/ 反查一条表情消息的上下文。
+ * 从 data/prod/raw/ 反查一条表情消息的上下文。
  *
  * @param msgId 消息 ID
  * @param session 会话标识
@@ -206,11 +206,11 @@ function main(): void {
     indexSession(target);
   } else {
     if (!existsSync(RAW_DIR)) {
-      console.log("data/raw/ does not exist, nothing to index.");
+      console.log("data/prod/raw/ does not exist, nothing to index.");
       return;
     }
     const files = readdirSync(RAW_DIR).filter((f) => f.endsWith(".jsonl"));
-    console.log(`Found ${files.length} session files in data/raw/`);
+    console.log(`Found ${files.length} session files in data/prod/raw/`);
     for (const f of files) {
       const session = f.replace(/\.jsonl$/, "");
       indexSession(session);
@@ -220,7 +220,7 @@ function main(): void {
   const stickerFiles = existsSync(STICKERS_DIR)
     ? readdirSync(STICKERS_DIR).filter((f) => f.endsWith(".jsonl"))
     : [];
-  console.log(`\nDone. ${stickerFiles.length} session(s) have sticker indexes in data/stickers/`);
+  console.log(`\nDone. ${stickerFiles.length} session(s) have sticker indexes in data/prod/stickers/`);
 }
 
 main();

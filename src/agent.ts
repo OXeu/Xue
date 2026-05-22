@@ -55,8 +55,8 @@ const MAX_CONTEXT = 30; // 加载最近 N 条消息作为上下文
 const VISION_MODEL = process.env.VISION_MODEL || "";
 const VISION_BASE_URL = (process.env.VISION_BASE_URL || LLM_BASE_URL).replace(/\/+$/, "");
 
-const RAW_DIR = resolve(import.meta.dirname, "../data/raw");
-let _inferencesDir = resolve(import.meta.dirname, "../data/inferences");
+const RAW_DIR = resolve(import.meta.dirname, "../data/prod/raw");
+let _inferencesDir = resolve(import.meta.dirname, "../data/prod/inferences");
 
 function ensureInferencesDir(): void {
   if (!existsSync(_inferencesDir)) mkdirSync(_inferencesDir, { recursive: true });
@@ -493,7 +493,7 @@ export function loadPhashMap(session: string): Map<number, string> {
   return map;
 }
 
-/** 从 data/inferences/{session}.jsonl 中查找某个 msgId 的缓存视觉描述。
+/** 从 data/prod/inferences/{session}.jsonl 中查找某个 msgId 的缓存视觉描述。
  *  当图片下载失败时，用此兜底注入 [图片描述: ...] 到消息文本中。 */
 export function loadCachedInference(session: string, msgId: number): string | null {
   const path = join(_inferencesDir, `${session}.jsonl`);
@@ -762,7 +762,7 @@ function connect(): void {
           );
         } catch {}
       } else if (imgUrl) {
-        // 下载失败，查 data/inferences 中是否有缓存描述
+        // 下载失败，查 data/prod/inferences 中是否有缓存描述
         cachedDescription = loadCachedInference(entry.session, entry.msgId);
       }
     }
@@ -920,10 +920,10 @@ function main(): void {
   }
 
   if (!existsSync(RAW_DIR)) {
-    log(`data/raw 不存在，请先运行监听器采集数据`);
+    log(`data/prod/raw 不存在，请先运行监听器采集数据`);
   } else {
     const files = readdirSync(RAW_DIR).filter((f) => f.endsWith(".jsonl"));
-    log(`data/raw 中有 ${files.length} 个会话文件`);
+    log(`data/prod/raw 中有 ${files.length} 个会话文件`);
   }
 
   log(`dry-run=${DRY_RUN}（${DRY_RUN ? "仅模拟，不会实际发送消息" : "会实际发送消息到群聊"}）`);

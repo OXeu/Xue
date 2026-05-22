@@ -849,15 +849,13 @@ describe("buildContextWithPhashIds [图片 #phash_xxx]", () => {
 
 describe("loadPhashMap", () => {
   const tmpDir = join(resolve(import.meta.dirname, ".."), "data", "tmp-test-phash");
-  const originalDir = process.env.RIN_TEST ? resolve(import.meta.dirname, "../data/inferences") : "";
+  const originalDir = ""; // 不再需要，保留变量避免编译错误
 
-  // 我们无法修改 agent 内部的 _inferencesDir，但可以通过文件操作测试 loadPhashMap
-  // 的读写逻辑。由于 loadPhashMap 读取固定路径，我们需要用真实路径测。
-  //
-  // 方案：直接写文件到 data/inferences 下测试用的文件名，测完清理。
+  // 由于 loadPhashMap 读取 agent.ts 模块内部的 _inferencesDir（data/prod/inferences），
+  // 我们直接写文件到 data/prod/inferences 下测试用的文件名，测完清理。
 
   const testSession = "unittest_phash_map_test";
-  const testFilePath = join(resolve(import.meta.dirname, "..", "data", "inferences"), `${testSession}.jsonl`);
+  const testFilePath = join(resolve(import.meta.dirname, "..", "data/prod", "inferences"), `${testSession}.jsonl`);
 
   afterAll(() => {
     try { rmSync(testFilePath, { force: true }); } catch { /* ok */ }
@@ -867,7 +865,7 @@ describe("loadPhashMap", () => {
     // 直接写文件模拟 agent 的行为
     const { mkdirSync, existsSync, appendFileSync } = await import("node:fs");
     const { join, resolve } = await import("node:path");
-    const inferencesDir = resolve(import.meta.dirname, "..", "data", "inferences");
+    const inferencesDir = resolve(import.meta.dirname, "..", "data/prod", "inferences");
     if (!existsSync(inferencesDir)) mkdirSync(inferencesDir, { recursive: true });
 
     const entry = {
@@ -933,12 +931,12 @@ describe("loadPhashMap", () => {
 
   test("全链路端到端：保存 phash → 加载 → 上下文显示 [图片 #phash_xxx]", async () => {
     const session = "unittest_e2e_phash";
-    const filePath2 = join(resolve(import.meta.dirname, "..", "data", "inferences"), `${session}.jsonl`);
+    const filePath2 = join(resolve(import.meta.dirname, "..", "data/prod", "inferences"), `${session}.jsonl`);
 
     try {
       const { appendFileSync, mkdirSync, existsSync } = await import("node:fs");
       const { resolve, join } = await import("node:path");
-      const inferencesDir = resolve(import.meta.dirname, "..", "data", "inferences");
+      const inferencesDir = resolve(import.meta.dirname, "..", "data/prod", "inferences");
       if (!existsSync(inferencesDir)) mkdirSync(inferencesDir, { recursive: true });
 
       const msgId = 7777;

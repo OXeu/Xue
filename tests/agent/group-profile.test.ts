@@ -2,7 +2,7 @@
  * tests/agent/group-profile.test.ts — 验证 buildSessionProfile()
  *
  * 覆盖：正常关键词提取、数据不足时返回空、私聊场景、空历史、边界行为。
- * 使用临时 JSONL 文件写入 data/raw/，测试后清理。
+ * 使用临时 JSONL 文件写入 data/prod/raw/，测试后清理。
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -11,7 +11,7 @@ import { join, resolve } from "node:path";
 
 import { buildSessionProfile, styleGuidance } from "../../src/agent";
 
-const RAW_DIR = resolve(import.meta.dirname, "../../data/raw");
+const RAW_DIR = resolve(import.meta.dirname, "../../data/prod/raw");
 
 /** 写入一行到 JSONL 文件 */
 function appendLine(sessionId: string, text: string): void {
@@ -57,7 +57,7 @@ function cleanFile(sessionId: string): void {
   if (existsSync(path)) unlinkSync(path);
 }
 
-// 确保 data/raw 存在
+// 确保 data/prod/raw 存在
 if (!existsSync(RAW_DIR)) mkdirSync(RAW_DIR, { recursive: true });
 
 // ── 测试 ────────────────────────────────────────────────

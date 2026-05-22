@@ -1,7 +1,7 @@
 /**
  * listen.ts — OneBot 正向 WebSocket 群聊监听器。
  *
- * 只收不发。收到消息后按会话写入 JSONL 到 data/raw/，
+ * 只收不发。收到消息后按会话写入 JSONL 到 data/prod/raw/，
  * 用于后续分析群聊风格基线。
  *
  * 用法:  ONEBOT_WS_URL=ws://localhost:6700 bun run src/listen.ts
@@ -85,7 +85,7 @@ interface ListenEntry {
 
 // ── 路径 ────────────────────────────────────────────────
 
-const DATA_DIR = resolve(import.meta.dirname, "../data/raw");
+const DATA_DIR = resolve(import.meta.dirname, "../data/prod/raw");
 
 function ensureDataDir(): void {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
@@ -362,7 +362,7 @@ function main(): void {
     try {
       fileCount = readdirSync(DATA_DIR).filter((f: string) => f.endsWith(".jsonl")).length;
     } catch { /* ignore */ }
-    console.error(`[${ts()}] [heartbeat] running, ${elapsed}s elapsed, ${fileCount} files in data/raw/`);
+    console.error(`[${ts()}] [heartbeat] running, ${elapsed}s elapsed, ${fileCount} files in data/prod/raw/`);
   }, 300_000);
 
   // 保持进程运行

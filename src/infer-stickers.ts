@@ -1,12 +1,12 @@
 /**
  * infer-stickers.ts — 批量推理原型：对索引中的表情包图片调用视觉模型分析含义。
  *
- * 读取 data/stickers/ 中的索引条目（type: image），对每条：
- * 1. 优先检查 data/images/ 本地缓存
+ * 读取 data/prod/stickers/ 中的索引条目（type: image），对每条：
+ * 1. 优先检查 data/prod/images/ 本地缓存
  * 2. 无缓存时尝试从 CDN URL 即时下载
  * 3. 计算感知哈希（dHash），与已推理图片对比去重（汉明距离 ≤ 3 视为重复）
  * 4. 调用视觉模型分析含义
- * 5. 结果写入 data/inferences/{session}.jsonl
+ * 5. 结果写入 data/prod/inferences/{session}.jsonl
  *
  * 已推理的条目（msgId）自动跳过，除非传入 --reindex 强制重新推理。
  *
@@ -24,9 +24,9 @@ import { cleanVisionDescription } from "./clean-vision";
 import { hasCache, getCachedImage, saveCachedImage } from "./image-cache";
 import { computeDHash, isDuplicate } from "./phash";
 
-const STICKERS_DIR = resolve(import.meta.dirname, "../data/stickers");
-const RAW_DIR = resolve(import.meta.dirname, "../data/raw");
-const INFERENCES_DIR = resolve(import.meta.dirname, "../data/inferences");
+const STICKERS_DIR = resolve(import.meta.dirname, "../data/prod/stickers");
+const RAW_DIR = resolve(import.meta.dirname, "../data/prod/raw");
+const INFERENCES_DIR = resolve(import.meta.dirname, "../data/prod/inferences");
 
 // ── 配置 ────────────────────────────────────────────────
 
@@ -345,7 +345,7 @@ export async function processSession(
 
 async function main(): Promise<void> {
   if (!existsSync(_stickersDir)) {
-    console.log("data/stickers/ does not exist. Run 'bun run index-stickers' first.");
+    console.log("data/prod/stickers/ does not exist. Run 'bun run index-stickers' first.");
     process.exit(1);
   }
 
