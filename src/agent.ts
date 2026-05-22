@@ -191,6 +191,17 @@ function getReplyChanceForSession(sessionId: string): number {
 /** 临时图片缓存：pHash → base64 + mime。在单次 onmessage 调用期间有效。 */
 const _imageCache = new Map<string, { base64: string; mime: string }>();
 
+/** 记录最后一次回复的目标用户，用于检测对话延续。 */
+let _lastBotReply: { userId: number; session: string; time: number } | null = null;
+const CONTINUATION_WINDOW_MS = 60_000; // 同一用户 60 秒内继续发消息视为对话延续
+
+/** 同一用户在同一会话中刚被回复过，判定为对话延续。 */
+function isConversationContinuation(userId: number, session: string): boolean {
+  if (!_lastBotReply) return false;
+  if (_lastBotReply.userId !== userId || _lastBotReply.session !== session) return false;
+  return (Date.now() - _lastBotReply.time) <= CONTINUATION_WINDOW_MS;
+}
+
 const DESCRIBE_IMAGE_TOOL = {
   type: "function" as const,
   function: {
@@ -548,7 +559,9 @@ function connect(): void {
     const scenarioKey = isPrivate ? "private" : decision.reason;
 
     // 低确定性触发：先做快速沉默检查，但附带图片描述（如有）
-    const lowCertainty = scenarioKey === "random" || scenarioKey === "bystander" || scenarioKey === "media";
+    // 对话延续（bot 刚回复过此人）跳过沉默检查，直接进入完整流程
+    const lowCertainty = !isConversationContinuation(entry.userId, entry.session)
+      && (scenarioKey === "random" || scenarioKey === "bystander" || scenarioKey === "media");
     if (lowCertainty) {
       // 如果消息包含图片，先下载并做单轮视觉描述
       let imageDesc = "";
@@ -589,10 +602,11 @@ function connect(): void {
         sendGroupMsg(ws!, data.group_id as number, quickReply);
       }
       log(`replied: ${quickReply.slice(0, 100)}`);
+      _lastBotReply = { userId: entry.userId, session: entry.session, time: Date.now() };
       return;
     }
 
-    // 高确定性触发（at-self / mentioned / at-all / private）：原有流程
+    // 高确定性触发（at-self / mentioned / at-all / private 或对话延续）：原有流程
 
     // 如果有图片，先下载图片
     let downloadedImg: { base64: string; mime: string } | null = null;
@@ -715,6 +729,7 @@ function connect(): void {
           sendGroupMsg(ws!, data.group_id as number, finalReply);
           log(`replied: ${finalReply.slice(0, 100)}`);
         }
+        _lastBotReply = { userId: entry.userId, session: entry.session, time: Date.now() };
       } else {
         log("no reply (model chose silence or vision loop exhausted)");
       }
