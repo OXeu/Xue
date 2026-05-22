@@ -266,32 +266,14 @@ async function describeImage(
 
 // ── 上下文 ──────────────────────────────────────────────
 
-/** 群聊画像缓存。从 data/groups.json 加载。 */
-interface GroupProfile {
-  name: string;
-  description: string;
-}
-
-let groupsCache: Record<string, GroupProfile> | null = null;
-
-function loadGroups(): Record<string, GroupProfile> {
-  if (groupsCache) return groupsCache;
-  const path = resolve(import.meta.dirname, "../data/groups.json");
-  try {
-    groupsCache = JSON.parse(readFileSync(path, "utf8"));
-  } catch {
-    groupsCache = {};
-  }
-  return groupsCache!;
-}
-
-/** 为已知群生成一段群描述，如"你在「群名」群里，这是一个……"。未知群返回空。 */
-function getGroupContext(sessionId: string): string {
-  const groups = loadGroups();
-  const profile = groups[sessionId];
-  if (!profile || !profile.description) return "";
-  const namePart = profile.name ? `「${profile.name}」` : "";
-  return `你在${namePart}群里，${profile.description}`;
+/** 从历史消息中提取群聊特征词。读取最近 200 条消息，返回高频关键词概览。 */
+function buildSessionProfile(sessionId: string): string {
+  if (sessionId.startsWith("private_")) return ""; // 私聊不做群特征提取
+  const entries = loadRecentMessages(sessionId, 200);
+  if (entries.length < 10) return ""; // 数据太少，没有足够信息量
+  const keywords = extractKeywords(entries, 10);
+  if (keywords.length === 0) return "";
+  return `群聊特征：${keywords.join("、")}`;
 }
 
 function loadRecentMessages(sessionId: string, limit: number): ListenEntry[] {
@@ -518,7 +500,7 @@ function connect(): void {
           content: [
             getSystemPrompt(BOT_NAME),
             getReplyRules(),
-            getGroupContext(entry.session),
+            buildSessionProfile(entry.session),
             topicSummary,
             `\n下面是这个群最近的消息：`,
             roleInstruction,
