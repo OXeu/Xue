@@ -19,7 +19,7 @@ if [ -f "$PID_FILE" ]; then
   rm -f "$PID_FILE"
 fi
 
-mkdir -p data/raw
+mkdir -p data/prod/raw
 
 # 安全加载 .env（逐行读，避免特殊字符被 shell 解释）
 if [ -f .env ]; then

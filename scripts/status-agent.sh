@@ -31,7 +31,7 @@ echo "PID:    $PID"
 echo "运行时长: $ELAPSED_FMT"
 
 # 数据文件
-RAW_DIR="data/raw"
+RAW_DIR="data/prod/raw"
 if [ -d "$RAW_DIR" ]; then
   FILES=$(find "$RAW_DIR" -name '*.jsonl' 2>/dev/null | wc -l)
   echo ""

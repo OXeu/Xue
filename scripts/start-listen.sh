@@ -17,4 +17,4 @@ nohup bun src/listen.ts >> "$LOG_FILE" 2>&1 &
 echo $! > "$PID_FILE"
 echo "监听器已启动 (PID $(cat $PID_FILE))"
 echo "日志: $LOG_FILE"
-echo "数据: data/raw/"
+echo "数据: data/prod/raw/"

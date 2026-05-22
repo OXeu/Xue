@@ -19,8 +19,8 @@ if kill -0 "$PID" 2>/dev/null; then
 
   echo ""
   echo "数据文件:"
-  if [ -d data/raw ]; then
-    for f in data/raw/*.jsonl; do
+  if [ -d data/prod/raw ]; then
+    for f in data/prod/raw/*.jsonl; do
       LINES=$(wc -l < "$f" 2>/dev/null || echo 0)
       echo "  $(basename $f): $LINES 条消息"
     done
