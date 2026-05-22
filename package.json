@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "agent": "bun src/agent.ts",
+    "backfill": "bun run scripts/backfill-legacy-phash.ts",
     "listen": "bun src/listen.ts",
     "replay": "bun src/replay.ts",
     "simulate": "bun src/simulate.ts",
