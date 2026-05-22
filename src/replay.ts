@@ -26,7 +26,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { computeDHash } from "./phash";
 import { downloadImage } from "./image-download";
-import { getCachedImage } from "./image-cache";
+import { getCachedImage, getCachedImageByUrl, getPhashByUrl } from "./image-cache";
 import { parseAtUsers, stripCqCodes, estimateMsgType } from "./cq-codes";
 import {
   extractKeywords,
@@ -263,6 +263,14 @@ async function main(): Promise<void> {
             downloaded = await downloadImage(imgUrl);
             if (downloaded) {
               phash = await computeDHash(downloaded.base64, downloaded.mime);
+            }
+            // CDN URL 过期 → 尝试本地缓存（listen.ts 可能已缓存）
+            if (!downloaded) {
+              const cached = getCachedImageByUrl(imgUrl);
+              if (cached) {
+                downloaded = cached;
+                phash = getPhashByUrl(imgUrl);
+              }
             }
           }
         }
