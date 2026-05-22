@@ -2,9 +2,10 @@
  * infer-stickers.ts — 批量推理原型：对索引中的表情包图片调用视觉模型分析含义。
  *
  * 读取 data/stickers/ 中的索引条目（type: image），对每条：
- * 1. 从 data/raw/ 反查前后各 3 条上下文
- * 2. 调用视觉模型（gemma4:26b via Ollama）分析图片含义
- * 3. 输出到终端，同时保存到 data/inferences/{session}.jsonl
+ * 1. 优先检查 data/test-images/ 本地缓存
+ * 2. 无缓存时尝试从 CDN URL 即时下载
+ * 3. 调用视觉模型分析含义
+ * 4. 结果写入 data/inferences/{session}.jsonl
  *
  * 已推理的条目（msgId）自动跳过，除非传入 --reindex 强制重新推理。
  *
@@ -116,7 +117,8 @@ let skipped = 0;
 
 // ── 图片获取 ────────────────────────────────────────────
 
-/** 获取图片 base64：优先使用本地缓存，无缓存时从 URL 下载（并缓存结果） */
+/** 获取图片 base64：优先使用本地缓存，无缓存时从 URL 即时下载。
+ *  CDN 链接有时效，若本地无缓存且下载失败则返回 null（表明图片已不可用）。 */
 async function getImageBase64(
   imageUrl: string, session: string, msgId: number,
 ): Promise<{ base64: string; mime: string } | null> {
@@ -129,7 +131,7 @@ async function getImageBase64(
     }
   }
 
-  // 2) 从原始 URL 下载
+  // 2) 从原始 URL 下载（listen 阶段已检查过的 CDN 链接在此时间窗口内应仍有效）
   try {
     const res = await fetch(imageUrl, { signal: AbortSignal.timeout(8_000) });
     if (res.ok) {
@@ -140,30 +142,16 @@ async function getImageBase64(
       console.log(`    [downloaded + cached] ${session}_${msgId}`);
       return { base64, mime };
     }
-  } catch { /* fall through */ }
+  } catch { /* no picsum fallback — 随机风景图对群聊含义是误导性的 */ }
 
-  // 3) QQ CDN 图片通常无法下载，用 picsum fallback
-  try {
-    const seed = `sticker-${session}-${msgId}`;
-    const fallbackUrl = `https://picsum.photos/seed/${encodeURIComponent(seed)}/400/300`;
-    const res = await fetch(fallbackUrl, { signal: AbortSignal.timeout(8_000) });
-    if (!res.ok) return null;
-    const buf = await res.arrayBuffer();
-    const mime = res.headers.get("content-type") || "image/jpeg";
-    return { base64: Buffer.from(buf).toString("base64"), mime };
-  } catch {
-    return null;
-  }
+  return null;
 }
 
-/** 调用视觉模型分析图片含义 */
-async function inferStickerMeaning(imageUrl: string, contextText: string, session: string, msgId: number): Promise<string | null> {
-  const img = await getImageBase64(imageUrl, session, msgId);
-  if (!img) {
-    console.error("    [error] 所有图片来源均失败");
-    return null;
-  }
-  const dataUri = `data:${img.mime};base64,${img.base64}`;
+/** 调用视觉模型分析图片含义（图片 base64 由调用方提供） */
+async function inferStickerMeaning(
+  base64: string, mime: string, contextText: string,
+): Promise<string | null> {
+  const dataUri = `data:${mime};base64,${base64}`;
   try {
     const res = await fetch(`${VISION_BASE_URL}/chat/completions`, {
       method: "POST",
@@ -252,9 +240,8 @@ export async function processSession(
     const sender = sticker.card || sticker.nickname;
 
     console.log(`\n--- [${total}] ${sticker.session} ---`);
-    const isCdnUrl = sticker.content.includes("multimedia");
-    if (isCdnUrl) {
-      console.log(`  ℹ QQ CDN 图片，若有本地缓存则直接读取，否则 picsum fallback`);
+    if (sticker.content.includes("multimedia")) {
+      console.log(`  ℹ QQ CDN 图片，若有本地缓存则直接读取`);
     }
     console.log(`  发送者: ${sender}`);
     console.log(`  图片: ${sticker.content}`);
@@ -263,34 +250,41 @@ export async function processSession(
       console.log(`    ${c.nickname}: ${c.text}`);
     }
 
+    // 尝试获取图片（本地缓存优先）
+    const img = await getImageBase64(sticker.content, sticker.session, sticker.msgId);
+    if (!img) {
+      console.log(`  ⏭ 跳过（CDN 已过期，无本地缓存）`);
+      continue;
+    }
+
     console.log(`  分析中...`);
-    const raw = await inferStickerMeaning(sticker.content, formatContext(ctx), sticker.session, sticker.msgId);
+    const raw = await inferStickerMeaning(img.base64, img.mime, formatContext(ctx));
     const inference = raw ? cleanVisionDescription(raw) : null;
 
     if (inference) {
       console.log(`  含义: ${inference}`);
       success++;
+
+      // 持久化推理结果（仅成功时写入）
+      const entry: InferenceEntry = {
+        msgId: sticker.msgId,
+        time: sticker.time,
+        session: sticker.session,
+        userId: sticker.userId,
+        nickname: sticker.nickname,
+        card: sticker.card,
+        type: sticker.type,
+        content: sticker.content,
+        text: sticker.text,
+        context: ctx,
+        inference,
+        timestamp: new Date().toISOString(),
+      };
+      saveInference(entry);
     } else {
       console.log(`  含义: (分析失败)`);
       fail++;
     }
-
-    // 持久化推理结果
-    const entry: InferenceEntry = {
-      msgId: sticker.msgId,
-      time: sticker.time,
-      session: sticker.session,
-      userId: sticker.userId,
-      nickname: sticker.nickname,
-      card: sticker.card,
-      type: sticker.type,
-      content: sticker.content,
-      text: sticker.text,
-      context: ctx,
-      inference,
-      timestamp: new Date().toISOString(),
-    };
-    saveInference(entry);
   }
 }
 

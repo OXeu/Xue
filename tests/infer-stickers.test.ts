@@ -267,21 +267,12 @@ describe("infer-stickers main flow integration", () => {
   });
 
   beforeEach(() => {
-    // 重置 mock fetch — 默认返回 404 以触发 picsum fallback
+    // 重置 mock fetch
     let callCount = 0;
     globalThis.fetch = ((url: string | URL | Request, ...args: any[]): Promise<Response> => {
       const urlStr = typeof url === "string" ? url : url.toString();
 
-      // 图片下载请求（picsum fallback）
-      if (urlStr.includes("picsum.photos")) {
-        const fakeImageBytes = Buffer.from("fake-jpeg-data");
-        return Promise.resolve(new Response(fakeImageBytes, {
-          status: 200,
-          headers: { "content-type": "image/jpeg" },
-        }));
-      }
-
-      // 视觉模型 API 请求
+      // 视觉模型 API 请求优先匹配
       if (urlStr.includes("/v1/chat/completions")) {
         callCount++;
         const responseText = callCount === 1
@@ -295,8 +286,12 @@ describe("infer-stickers main flow integration", () => {
         }));
       }
 
-      // 其余（如原始 CDN URL）→ 失败，触发 fallback
-      return Promise.resolve(new Response(null, { status: 403 }));
+      // 图片下载（CDN URL）→ 模拟图片数据
+      const fakeImageBytes = Buffer.from("fake-jpeg-data");
+      return Promise.resolve(new Response(fakeImageBytes, {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      }));
     }) as typeof globalThis.fetch;
   });
 
