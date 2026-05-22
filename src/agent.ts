@@ -655,7 +655,9 @@ function connect(): void {
 
       const displayText = imageDesc
         ? `${cleanText}（图片描述：${imageDesc.slice(0, 80)}）`
-        : cleanText;
+        : /\[CQ:image/.test(rawMessage)
+          ? `${cleanText} [图片]`
+          : cleanText;
 
       const quickReply = await quickDecideSilence(
         contextText, senderName, displayText, scenarioKey, topicSummary, atmosphereTag, continuationHint,
@@ -723,7 +725,9 @@ function connect(): void {
       // 初始消息列表
       const messageText = currentPhash !== null && _recentUserCache !== null && !/\[CQ:image/.test(rawMessage)
         ? `${cleanText}（之前发的图）`
-        : `${cleanText}`;
+        : /\[CQ:image/.test(rawMessage)
+          ? `${cleanText} [图片]`
+          : `${cleanText}`;
       const messages: any[] = [{
         role: "system",
         content: systemParts.filter(Boolean).join("\n"),
