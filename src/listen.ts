@@ -13,7 +13,7 @@
  *   DURATION_SECONDS     运行指定秒数后自动退出（不设则持续运行）
  */
 
-import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 // ── 类型 ────────────────────────────────────────────────
@@ -297,6 +297,17 @@ function main(): void {
       }, secs * 1000);
     }
   }
+
+  // 心跳日志：每 5 分钟输出状态到 stderr
+  const startTime = Date.now();
+  setInterval(() => {
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    let fileCount = 0;
+    try {
+      fileCount = readdirSync(DATA_DIR).filter((f: string) => f.endsWith(".jsonl")).length;
+    } catch { /* ignore */ }
+    console.error(`[${ts()}] [heartbeat] running, ${elapsed}s elapsed, ${fileCount} files in data/raw/`);
+  }, 300_000);
 
   // 保持进程运行
   process.on("SIGINT", () => {
