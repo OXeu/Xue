@@ -12,6 +12,7 @@ rin-research-humanize/
 │   ├── agent.ts            # 主 agent：WS 监听 → 上下文 → LLM → 回复
 │   ├── listen.ts           # 消息监听器（只收不发，记录 JSONL 作为上下文和历史）
 │   ├── index-stickers.ts   # 表情包索引器：扫描 data/raw/，记录 msgId/session/type/content
+│   ├── infer-stickers.ts   # 批量推理原型：调用视觉模型分析表情包含义
 │   ├── simulate.ts         # 模拟重放：不调 LLM，只输出决策和 prompt，零成本评估
 │   ├── replay.ts           # 重放历史消息：调 LLM 生成实际回复，用于验证
 │   ├── clean-vision.ts     # 清洗视觉模型的 reasoning 输出，提取纯文本描述
@@ -149,6 +150,7 @@ const ctx5 = getStickerContext(msgId, session, 5);
 | `bun run listen` | 前台运行监听器 |
 | `bun run simulate` | 模拟重放（零成本评估 prompt） |
 | `bun run index-stickers` | 扫描并索引表情包到 data/stickers/ |
+| `bun run infer-stickers` | 对 data/stickers/ 中的图片调用视觉模型分析含义 |
 | `bun run replay` | 重放历史消息并调 LLM |
 | `bun run start-agent` | 后台启动 agent |
 | `bun run stop-agent` | 停止 agent |

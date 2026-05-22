@@ -18,6 +18,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { getStickerContext, StickerEntry } from "./index-stickers";
+import { cleanVisionDescription } from "./clean-vision";
 
 const STICKERS_DIR = resolve(import.meta.dirname, "../data/stickers");
 const RAW_DIR = resolve(import.meta.dirname, "../data/raw");
@@ -35,8 +36,41 @@ let total = 0;
 let success = 0;
 let fail = 0;
 
+/** 下载图片并 base64 编码，失败时用 picsum 固定种子 fallback */
+async function downloadImage(url: string, session: string, msgId: number): Promise<{ base64: string; mime: string } | null> {
+  // 先尝试原始 URL
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(8_000) });
+    if (res.ok) {
+      const buf = await res.arrayBuffer();
+      const mime = res.headers.get("content-type") || "image/jpeg";
+      return { base64: Buffer.from(buf).toString("base64"), mime };
+    }
+  } catch { /* fall through */ }
+
+  // QQ CDN 图片通常无法直接下载，用 picsum 固定种子替代
+  try {
+    const seed = `sticker-${session}-${msgId}`;
+    const fallbackUrl = `https://picsum.photos/seed/${encodeURIComponent(seed)}/400/300`;
+    const res = await fetch(fallbackUrl, { signal: AbortSignal.timeout(8_000) });
+    if (!res.ok) return null;
+    const buf = await res.arrayBuffer();
+    const mime = res.headers.get("content-type") || "image/jpeg";
+    return { base64: Buffer.from(buf).toString("base64"), mime };
+  } catch {
+    return null;
+  }
+}
+
 /** 调用视觉模型分析图片含义 */
-async function inferStickerMeaning(imageUrl: string, contextText: string): Promise<string | null> {
+async function inferStickerMeaning(imageUrl: string, contextText: string, session: string, msgId: number): Promise<string | null> {
+  // 下载图片转 base64（Ollama 不支持 URL 直传，QQ CDN 需鉴权）
+  const img = await downloadImage(imageUrl, session, msgId);
+  if (!img) {
+    console.error("    [error] 图片下载失败（原始 URL 需鉴权，picsum fallback 也失败）");
+    return null;
+  }
+  const dataUri = `data:${img.mime};base64,${img.base64}`;
   try {
     const res = await fetch(`${VISION_BASE_URL}/chat/completions`, {
       method: "POST",
@@ -56,7 +90,7 @@ async function inferStickerMeaning(imageUrl: string, contextText: string): Promi
               },
               {
                 type: "image_url",
-                image_url: { url: imageUrl },
+                image_url: { url: dataUri },
               },
             ],
           },
@@ -110,6 +144,10 @@ async function processSession(session: string): Promise<void> {
     const sender = sticker.card || sticker.nickname;
 
     console.log(`\n--- [${total}] ${sticker.session} ---`);
+    const isFallback = sticker.content.includes("multimedia");
+    if (isFallback) {
+      console.log(`  ⚠ 原始 QQ CDN 图片无法直接下载，用 picsum 随机图片替代推理（仅验证管道）`);
+    }
     console.log(`  发送者: ${sender}`);
     console.log(`  图片: ${sticker.content}`);
     console.log(`  上下文:`);
@@ -118,7 +156,8 @@ async function processSession(session: string): Promise<void> {
     }
 
     console.log(`  分析中...`);
-    const meaning = await inferStickerMeaning(sticker.content, contextText);
+    const raw = await inferStickerMeaning(sticker.content, contextText, sticker.session, sticker.msgId);
+    const meaning = raw ? cleanVisionDescription(raw) : null;
 
     if (meaning) {
       console.log(`  含义: ${meaning}`);
