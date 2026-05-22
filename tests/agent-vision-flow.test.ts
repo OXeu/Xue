@@ -8,7 +8,7 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 // 设置环境变量后再动态导入，确保 callVision 能读取到
@@ -1578,5 +1578,157 @@ describe("analyzeAtmosphere", () => {
       msg("不错不错"),
     ];
     expect(analyzeAtmosphere(entries)).toBe("气氛：正常");
+  });
+});
+
+// ── CDN 下载失败兜底：loadCachedInference 集成分支 ──────
+
+describe("CDN 下载失败 → loadCachedInference 兜底", () => {
+  let loadCachedInference: (session: string, msgId: number) => string | null;
+
+  beforeAll(async () => {
+    const mod = await import("../src/agent");
+    loadCachedInference = mod.loadCachedInference;
+  });
+
+  const testSession = "unittest_fallback_integration";
+  const testFilePath = join(
+    resolve(import.meta.dirname, "..", "data/prod", "inferences"),
+    `${testSession}.jsonl`,
+  );
+
+  afterEach(() => {
+    try { rmSync(testFilePath, { force: true }); } catch { /* ok */ }
+  });
+
+  // ── 高确定性路径：下载失败 → cachedDescription → [图片描述: ...] ──
+
+  test("高确定性：downloadImage 返回 null → cachedDescription 注入 [图片描述: ...]", () => {
+    // 1. 写入缓存描述
+    const cachedDesc = "A photo of a white cat sitting on a red sofa, looking relaxed.";
+    const msgId = 10001;
+    const inferencesDir = resolve(import.meta.dirname, "..", "data/prod", "inferences");
+    if (!existsSync(inferencesDir)) mkdirSync(inferencesDir, { recursive: true });
+    writeFileSync(
+      testFilePath,
+      JSON.stringify({ msgId, session: testSession, phash: "phash_10001", inference: cachedDesc }) + "\n",
+      "utf8",
+    );
+
+    // 2. 模拟高确定性 onmessage 分支：
+    //    downloadedImg = null (downloadImage failed)
+    //    cachedDescription = loadCachedInference(session, msgId)
+    const cachedDescription = loadCachedInference(testSession, msgId);
+    expect(cachedDescription).toBe(cachedDesc);
+
+    // 3. 模拟消息文本构造（高确定性路径）：
+    const cleanText = "看这张图";
+    const descSuffix = cachedDescription
+      ? ` [图片描述: ${cachedDescription.slice(0, 80)}]`
+      : "";
+    const messageText = `${cleanText}${descSuffix}`;
+
+    expect(messageText).toBe("看这张图 [图片描述: A photo of a white cat sitting on a red sofa, looking relaxed.]");
+    // 确认与低确定性格式不同
+    expect(messageText).not.toContain("（图片描述：");
+  });
+
+  test("高确定性：无缓存描述时不添加后缀", () => {
+    // 无缓存文件，loadCachedInference 返回 null
+    const cachedDescription = loadCachedInference(testSession, 99999);
+    expect(cachedDescription).toBeNull();
+
+    const cleanText = "看看这个";
+    const descSuffix = cachedDescription
+      ? ` [图片描述: ${cachedDescription.slice(0, 80)}]`
+      : "";
+    const messageText = `${cleanText}${descSuffix}`;
+
+    expect(messageText).toBe("看看这个");
+    expect(messageText).not.toContain("[图片描述:");
+  });
+
+  // ── 低确定性路径：下载失败 + callVision 无果 → 查缓存 → displayText ──
+
+  test("低确定性：downloadImage 失败且 callVision 无果 → 查 loadCachedInference → （图片描述：...）", () => {
+    // 1. 写入缓存描述
+    const cachedDesc = "A photo of a white cat sleeping on a red sofa, relaxed atmosphere.";
+    const msgId = 10002;
+    const inferencesDir = resolve(import.meta.dirname, "..", "data/prod", "inferences");
+    if (!existsSync(inferencesDir)) mkdirSync(inferencesDir, { recursive: true });
+    writeFileSync(
+      testFilePath,
+      JSON.stringify({ msgId, session: testSession, phash: "phash_10002", inference: cachedDesc }) + "\n",
+      "utf8",
+    );
+
+    // 2. 模拟低确定性分支：
+    //    downloadImage 返回 null → imageDesc 保持空字符串
+    //    然后查缓存：if (!imageDesc) { cached = loadCachedInference(...) }
+    let imageDesc = "";
+    if (!imageDesc) {
+      const cached = loadCachedInference(testSession, msgId);
+      if (cached) imageDesc = cached;
+    }
+    expect(imageDesc).toBe(cachedDesc);
+
+    // 3. 模拟 displayText 构造（低确定性路径）：
+    const cleanText = "";
+    const displayText = imageDesc
+      ? `${cleanText}（图片描述：${imageDesc.slice(0, 80)}）`
+      : cleanText;
+
+    expect(displayText).toContain("（图片描述：A photo of a white cat sleeping");
+    expect(displayText).toContain("relaxed atmosphere");
+    // 确认与高确定性格式不同
+    expect(displayText).not.toContain("[图片描述:");
+  });
+
+  test("低确定性：下载失败且无缓存 → displayText 退化为纯文本", () => {
+    // 无缓存
+    let imageDesc = "";
+    if (!imageDesc) {
+      const cached = loadCachedInference(testSession, 99999);
+      if (cached) imageDesc = cached;
+    }
+    expect(imageDesc).toBe("");
+
+    const cleanText = "看看这张图";
+    const displayText = imageDesc
+      ? `${cleanText}（图片描述：${imageDesc.slice(0, 80)}）`
+      : cleanText;
+
+    expect(displayText).toBe("看看这张图");
+    expect(displayText).not.toContain("（图片描述：");
+  });
+
+  // ── 低确定性 + 高确定性格式对比 ──
+
+  test("两种路径使用不同的括号格式（高确定性方括号 vs 低确定性圆括号）", () => {
+    const desc = "A description for format comparison test";
+    const msgId = 10003;
+    const inferencesDir = resolve(import.meta.dirname, "..", "data/prod", "inferences");
+    if (!existsSync(inferencesDir)) mkdirSync(inferencesDir, { recursive: true });
+    writeFileSync(
+      testFilePath,
+      JSON.stringify({ msgId, session: testSession, phash: "phash_10003", inference: desc }) + "\n",
+      "utf8",
+    );
+
+    const cachedDescription = loadCachedInference(testSession, msgId);
+    expect(cachedDescription).toBe(desc);
+
+    // 高确定性格式
+    const highFormat = ` [图片描述: ${cachedDescription!.slice(0, 80)}]`;
+    // 低确定性格式
+    const lowFormat = `（图片描述：${cachedDescription!.slice(0, 80)}）`;
+
+    // 同一个描述，两种格式，互相不应包含对方的外壳
+    expect(highFormat).toContain("[图片描述:");
+    expect(highFormat).toContain("]");
+    expect(lowFormat).toContain("（图片描述：");
+    expect(lowFormat).toContain("）");
+    expect(highFormat).not.toContain("（");
+    expect(lowFormat).not.toContain("[");
   });
 });
