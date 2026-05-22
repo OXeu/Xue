@@ -19,6 +19,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { getStickerContext, StickerEntry } from "./index-stickers";
 import { cleanVisionDescription } from "./clean-vision";
+import { hasCache, getCachedImage, saveCachedImage } from "./image-cache";
 
 const STICKERS_DIR = resolve(import.meta.dirname, "../data/stickers");
 const RAW_DIR = resolve(import.meta.dirname, "../data/raw");
@@ -36,19 +37,34 @@ let total = 0;
 let success = 0;
 let fail = 0;
 
-/** 下载图片并 base64 编码，失败时用 picsum 固定种子 fallback */
-async function downloadImage(url: string, session: string, msgId: number): Promise<{ base64: string; mime: string } | null> {
-  // 先尝试原始 URL
+/** 获取图片 base64：优先使用本地缓存，无缓存时从 URL 下载（并缓存结果） */
+async function getImageBase64(
+  imageUrl: string, session: string, msgId: number,
+): Promise<{ base64: string; mime: string } | null> {
+  // 1) 优先本地缓存
+  if (hasCache(session, msgId)) {
+    const cached = getCachedImage(session, msgId);
+    if (cached) {
+      console.log(`    [cache hit] ${session}_${msgId}`);
+      return cached;
+    }
+  }
+
+  // 2) 从原始 URL 下载
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(8_000) });
+    const res = await fetch(imageUrl, { signal: AbortSignal.timeout(8_000) });
     if (res.ok) {
       const buf = await res.arrayBuffer();
       const mime = res.headers.get("content-type") || "image/jpeg";
-      return { base64: Buffer.from(buf).toString("base64"), mime };
+      const base64 = Buffer.from(buf).toString("base64");
+      // 下载成功后写入缓存，后续直接命中
+      saveCachedImage(session, msgId, base64, mime, "(pending)", imageUrl);
+      console.log(`    [downloaded + cached] ${session}_${msgId}`);
+      return { base64, mime };
     }
   } catch { /* fall through */ }
 
-  // QQ CDN 图片通常无法直接下载，用 picsum 固定种子替代
+  // 3) QQ CDN 图片通常无法下载，用 picsum fallback
   try {
     const seed = `sticker-${session}-${msgId}`;
     const fallbackUrl = `https://picsum.photos/seed/${encodeURIComponent(seed)}/400/300`;
@@ -64,10 +80,9 @@ async function downloadImage(url: string, session: string, msgId: number): Promi
 
 /** 调用视觉模型分析图片含义 */
 async function inferStickerMeaning(imageUrl: string, contextText: string, session: string, msgId: number): Promise<string | null> {
-  // 下载图片转 base64（Ollama 不支持 URL 直传，QQ CDN 需鉴权）
-  const img = await downloadImage(imageUrl, session, msgId);
+  const img = await getImageBase64(imageUrl, session, msgId);
   if (!img) {
-    console.error("    [error] 图片下载失败（原始 URL 需鉴权，picsum fallback 也失败）");
+    console.error("    [error] 所有图片来源均失败（无缓存、CDN 不可用、picsum fallback 也失败）");
     return null;
   }
   const dataUri = `data:${img.mime};base64,${img.base64}`;
@@ -144,9 +159,9 @@ async function processSession(session: string): Promise<void> {
     const sender = sticker.card || sticker.nickname;
 
     console.log(`\n--- [${total}] ${sticker.session} ---`);
-    const isFallback = sticker.content.includes("multimedia");
-    if (isFallback) {
-      console.log(`  ⚠ 原始 QQ CDN 图片无法直接下载，用 picsum 随机图片替代推理（仅验证管道）`);
+    const isCdnUrl = sticker.content.includes("multimedia");
+    if (isCdnUrl) {
+      console.log(`  ℹ QQ CDN 图片，若有本地缓存则直接读取，否则 picsum fallback`);
     }
     console.log(`  发送者: ${sender}`);
     console.log(`  图片: ${sticker.content}`);
