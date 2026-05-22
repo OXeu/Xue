@@ -460,7 +460,7 @@ function decideReply(entry: ListenEntry, msgType: string, rawText: string): Repl
 
   // 被 @ 别人 → 旁观者模式，降低概率
   if (isAtOther) {
-    return { should: Math.random() < 0.15, reason: "bystander" };
+    return { should: Math.random() < 0.05, reason: "bystander" };
   }
 
   // 默认

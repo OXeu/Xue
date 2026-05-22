@@ -280,7 +280,7 @@ function decideReply(
   if (isAtSelf || isAtAll) return { should: true, reason: isAtSelf ? "at-self" : "at-all" };
   if (mentioned) return { should: Math.random() < 0.7, reason: "mentioned" };
   if (msgType === "face" || msgType === "image") return { should: Math.random() < 0.1, reason: "media" };
-  if (isAtOther) return { should: Math.random() < 0.15, reason: "bystander" };
+  if (isAtOther) return { should: Math.random() < 0.05, reason: "bystander" };
   return { should: Math.random() < REPLY_CHANCE, reason: "random" };
 }
 

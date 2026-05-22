@@ -136,7 +136,7 @@ function decideReply(entry: ListenEntry, rawText: string, msgType: string): Repl
   if (isAtSelf || isAtAll) return { should: true, reason: isAtSelf ? "at-self" : "at-all" };
   if (mentioned) return { should: Math.random() < 0.7, reason: "mentioned" };
   if (msgType === "face" || msgType === "image") return { should: false, reason: "media (skip)" };
-  if (isAtOther) return { should: false, reason: "bystander (skip)" };
+  if (isAtOther) return { should: Math.random() < 0.05, reason: "bystander" };
   return { should: Math.random() < REPLY_CHANCE, reason: "random" };
 }
 
