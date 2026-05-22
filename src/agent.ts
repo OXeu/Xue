@@ -443,9 +443,9 @@ function connect(): void {
       segmentTypes: [],
     };
 
-    // 决策是否回复（私聊必回，群聊按原有逻辑）
+    // 决策是否回复（私聊必回但跳过自己的消息，群聊按原有逻辑）
     const decision = isPrivate
-      ? { should: true, reason: "private" }
+      ? { should: userId !== BOT_QQ, reason: "private" }
       : decideReply(entry, msgType, rawMessage);
     if (!decision.should) return;
 
