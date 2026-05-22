@@ -841,11 +841,48 @@ function connect(): void {
 
     const scenarioKey = isPrivate ? "private" : decision.reason;
 
-    // 低确定性触发：先做快速沉默检查，避免不必要的图片下载和视觉循环
+    // 低确定性触发：先做快速沉默检查，但附带图片描述（如有）
     const lowCertainty = scenarioKey === "random" || scenarioKey === "bystander" || scenarioKey === "media";
     if (lowCertainty) {
+      // 如果消息包含图片，先下载并做单轮视觉描述
+      let imageDesc = "";
+      if (/\[CQ:image/.test(rawMessage)) {
+        const imgUrl = parseFirstImageUrl(rawMessage);
+        if (imgUrl) {
+          const downloaded = await downloadImage(imgUrl);
+          if (downloaded) {
+            const phash = await computeDHash(downloaded.base64, downloaded.mime);
+            _imageCache.set(phash, downloaded);
+            try {
+              ensureInferencesDir();
+              appendFileSync(
+                join(_inferencesDir, `${entry.session}.jsonl`),
+                JSON.stringify({ msgId: entry.msgId, session: entry.session, phash, timestamp: new Date().toISOString() }) + "\n",
+                "utf8",
+              );
+            } catch {}
+            if (VISION_MODEL) {
+              const answer = await callVision("简要描述这张图片的内容", downloaded.base64, downloaded.mime);
+              if (answer && !isVagueDescription(answer)) {
+                imageDesc = answer;
+                persistBestDescription(_inferencesDir, entry.session, entry.msgId, phash, imageDesc);
+              }
+            }
+          }
+        }
+        // 下载失败时查缓存
+        if (!imageDesc) {
+          const cached = loadCachedInference(entry.session, entry.msgId);
+          if (cached) imageDesc = cached;
+        }
+      }
+
+      const displayText = imageDesc
+        ? `${cleanText}（图片描述：${imageDesc.slice(0, 80)}）`
+        : cleanText;
+
       const quickReply = await quickDecideSilence(
-        contextText, senderName, cleanText, scenarioKey, topicSummary, atmosphereTag,
+        contextText, senderName, displayText, scenarioKey, topicSummary, atmosphereTag,
       );
       if (!quickReply || quickReply.toUpperCase() === "SILENT") {
         log(`silent (model chose not to speak)`);

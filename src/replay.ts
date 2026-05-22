@@ -718,7 +718,7 @@ async function main(): Promise<void> {
       contextSize: contextEntries.length,
     };
 
-    // 如果决定回复，做快速沉默检查
+    // 如果决定回复，做快速沉默检查（附带图片描述，如有）
     if (decision.should) {
       const phashMap = loadPhashMap(SESSION);
       const ctxEntries = allEntries.slice(
@@ -730,13 +730,49 @@ async function main(): Promise<void> {
       const summary = kws.length > 0 ? `当前话题：${kws.join("、")}` : "";
       const atmosphereTag = analyzeAtmosphere(ctxEntries);
 
-      const quickReply = await quickDecideSilence(ctxText, senderName, cleanText, decision.reason, summary, atmosphereTag);
+      // 如果是图片消息，先下载并做单轮视觉描述
+      let imageDesc = "";
+      if (isImageMsg(e)) {
+        const imgUrl = e.imageUrls?.[0] ?? null;
+        if (imgUrl) {
+          const downloaded = await downloadImage(imgUrl);
+          if (downloaded) {
+            const phash = await computeDHash(downloaded.base64, downloaded.mime);
+            _imageCache.set(phash, downloaded);
+            try {
+              if (!existsSync(_inferencesDir)) mkdirSync(_inferencesDir, { recursive: true });
+              appendFileSync(
+                join(_inferencesDir, `${SESSION}.jsonl`),
+                JSON.stringify({ msgId: e.msgId, session: SESSION, phash, timestamp: new Date().toISOString() }) + "\n",
+                "utf8",
+              );
+            } catch {}
+            if (VISION_MODEL) {
+              const answer = await describeImageFromBase64("简要描述这张图片的内容", downloaded.base64, downloaded.mime);
+              if (answer && !isVagueDescription(answer)) {
+                imageDesc = answer;
+                persistBestDescription(_inferencesDir, SESSION, e.msgId, phash, imageDesc);
+              }
+            }
+          }
+        }
+        if (!imageDesc) {
+          const cached = loadCachedInference(SESSION, e.msgId);
+          if (cached) imageDesc = cached;
+        }
+      }
+
+      const displayText = imageDesc
+        ? `${cleanText}（图片描述：${imageDesc.slice(0, 80)}）`
+        : cleanText;
+
+      const quickReply = await quickDecideSilence(ctxText, senderName, displayText, decision.reason, summary, atmosphereTag);
       if (!quickReply || quickReply.toUpperCase() === "SILENT") {
         console.log(`[${result.time}] ${result.sender} [silent] ${cleanText.slice(0, 60)}`);
       } else {
         result.reply = quickReply;
         console.log(`[${result.time}] ${result.sender} [${decision.reason}]`);
-        console.log(`  触发: ${cleanText.slice(0, 60) || "(图片)"}`);
+        console.log(`  触发: ${displayText.slice(0, 60) || "(图片)"}`);
         console.log(`  回复: ${quickReply.slice(0, 120)}`);
         console.log(`  话题: ${summary || "(无)"}`);
         console.log();
