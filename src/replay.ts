@@ -327,6 +327,23 @@ function loadPhashMap(session: string): Map<number, string> {
   return map;
 }
 
+/** 从 data/inferences/{session}.jsonl 中查找某个 msgId 的缓存视觉描述。
+ *  当图片下载失败时，用此兜底。 */
+export function loadCachedInference(session: string, msgId: number): string | null {
+  const path = resolve(INFERENCES_DIR, `${session}.jsonl`);
+  if (!existsSync(path)) return null;
+  const lines = readFileSync(path, "utf8").trim().split("\n").filter(Boolean);
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry.msgId === msgId && entry.inference && typeof entry.inference === "string") {
+        return entry.inference;
+      }
+    } catch { /* skip */ }
+  }
+  return null;
+}
+
 function ts(): string {
   return new Date().toISOString();
 }
@@ -623,6 +640,7 @@ async function main(): Promise<void> {
       // 如果是图片消息，下载图片并计算 phash
       let hasImage = false;
       let currentPhash: string | null = null;
+      let cachedDescription: string | null = null;
       if (isImageMsg(e)) {
         // 尝试从 imageUrls 或 CQ 码中获取 URL
         const imgUrl = e.imageUrls?.[0] ?? null;
@@ -643,6 +661,9 @@ async function main(): Promise<void> {
               );
             } catch {}
             phashMap.set(e.msgId, currentPhash);
+          } else {
+            // 下载失败，查 data/inferences 中是否有缓存描述
+            cachedDescription = loadCachedInference(SESSION, e.msgId);
           }
         }
       }
@@ -670,13 +691,19 @@ async function main(): Promise<void> {
           if (visionPrompt) systemParts.push(`\n\n${visionPrompt}`);
         }
 
+        // 如有缓存描述，在消息文本中注入 [图片描述: ...]
+        const descSuffix = cachedDescription
+          ? ` [图片描述: ${cachedDescription.slice(0, 80)}]`
+          : "";
+        const messageText = `${cleanText || "[图片]"}${descSuffix}`;
+
         const messages: any[] = [
           { role: "system", content: systemParts.filter(Boolean).join("\n") },
           {
             role: "user",
             content: hasImage && currentPhash
-            ? `【群聊上下文】\n${contextText}\n\n【新消息（含图片 #${currentPhash}）】${senderName}: ${cleanText || "[图片]"}\n\n请以 ${BOT_NAME} 的身份自然回复。`
-            : `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${cleanText || "[图片]"}\n\n请以 ${BOT_NAME} 的身份自然回复。`,
+            ? `【群聊上下文】\n${contextText}\n\n【新消息（含图片 #${currentPhash}）】${senderName}: ${messageText}\n\n请以 ${BOT_NAME} 的身份自然回复。`
+            : `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${messageText}\n\n请以 ${BOT_NAME} 的身份自然回复。`,
           },
         ];
 
