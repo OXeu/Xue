@@ -80,7 +80,7 @@ Index 56 — 原始: * Input: An image showing a white bowl containing...
 
 引入图片缓存系统（`image-cache.ts`）后，重放管线端到端稳定：
 
-- 图片描述写入 `data/test-images/` 后不再变动
+- 图片描述写入 `data/images/` 后不再变动
 - 每次重放相同会话和消息 ID 时返回完全一致的描述
 - LLM 回复基于确定的描述生成，不会因 picsum 随机图导致质量波动
 

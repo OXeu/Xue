@@ -17,6 +17,7 @@ import {
   processSession,
 } from "../src/infer-stickers";
 import type { InferenceEntry } from "../src/infer-stickers";
+import { setCacheDir } from "../src/image-cache";
 import { computeDHashFromBuffer, hammingDistance } from "../src/phash";
 import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
@@ -226,6 +227,7 @@ describe("infer-stickers main flow integration", () => {
   let oldStickersDir: string;
   let oldRawDir: string;
   let oldInferencesDir: string;
+  let oldCacheDir: string;
   let originalFetch: typeof globalThis.fetch;
 
   /** 创建临时 sticker 索引文件 */
@@ -250,6 +252,7 @@ describe("infer-stickers main flow integration", () => {
     oldStickersDir = setStickersDir(stickersDir);
     oldRawDir = setRawDir(rawDir);
     oldInferencesDir = setInferencesDir(inferencesDir);
+    oldCacheDir = setCacheDir(join(TMP_ROOT, "images"));
 
     // 保存原始 fetch
     originalFetch = globalThis.fetch;
@@ -260,6 +263,7 @@ describe("infer-stickers main flow integration", () => {
     setStickersDir(oldStickersDir);
     setRawDir(oldRawDir);
     setInferencesDir(oldInferencesDir);
+    setCacheDir(oldCacheDir);
 
     // 恢复 fetch
     globalThis.fetch = originalFetch;

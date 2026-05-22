@@ -2,7 +2,7 @@
  * infer-stickers.ts — 批量推理原型：对索引中的表情包图片调用视觉模型分析含义。
  *
  * 读取 data/stickers/ 中的索引条目（type: image），对每条：
- * 1. 优先检查 data/test-images/ 本地缓存
+ * 1. 优先检查 data/images/ 本地缓存
  * 2. 无缓存时尝试从 CDN URL 即时下载
  * 3. 计算感知哈希（dHash），与已推理图片对比去重（汉明距离 ≤ 3 视为重复）
  * 4. 调用视觉模型分析含义
