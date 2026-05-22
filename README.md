@@ -12,7 +12,7 @@ rin-research-humanize/
 │   ├── agent.ts            # 主 agent：WS 监听 → 上下文 → LLM → 回复
 │   ├── listen.ts           # 消息监听器：记录 JSONL + 异步缓存图片到 test-images/
 │   ├── index-stickers.ts   # 表情包索引器：扫描 data/raw/，记录 msgId/session/type/content
-│   ├── infer-stickers.ts   # 批量推理原型：调用视觉模型分析表情包含义
+│   ├── infer-stickers.ts   # 批量推理原型：扫描索引，调用视觉模型推理，结果写入 data/inferences/，含 --reindex 选项
 │   ├── simulate.ts         # 模拟重放：不调 LLM，只输出决策和 prompt，零成本评估
 │   ├── replay.ts           # 重放历史消息：调 LLM 生成实际回复，用于验证
 │   ├── clean-vision.ts     # 清洗视觉模型的 reasoning 输出，提取纯文本描述
@@ -30,7 +30,8 @@ rin-research-humanize/
 │   └── agent/group-profile.test.ts   # 群聊特征 + 风格分析测试
 ├── data/
 │   ├── raw/                # 监听器 JSONL（运行时生成）
-│   └── test-images/        # 图片缓存（listen 异步下载，供 infer-stickers 使用）
+│   ├── test-images/        # 图片缓存（listen 异步下载，供 infer-stickers 使用）
+│   └── inferences/         # 推理结果持久化（由 infer-stickers 生成）
 ├── docs/
 │   └── experiment-logs/    # 实验记录
 ├── .env                    # 配置（参考 .env.example）
@@ -128,7 +129,7 @@ const ctx5 = getStickerContext(msgId, session, 5);
 
 窗口大小可在使用时动态调整，无需重新索引。
 
-### 图片缓存
+### 图片缓存与推理持久化
 
 `listen.ts` 在收到图片消息时，会**异步**（fire-and-forget，不阻塞消息处理）将图片下载到 `data/test-images/` 目录：
 
@@ -136,6 +137,8 @@ const ctx5 = getStickerContext(msgId, session, 5);
 2. 通过 `hasCache()` 检查是否已缓存，避免重复下载
 3. 下载失败时静默跳过（QQ CDN 需要鉴权，部分旧图片可能无法下载）
 4. 已缓存的图片可被 `infer-stickers` 直接读取，无需 picsum fallback
+
+推理结果持久化到 `data/inferences/{session}.jsonl`，包含完整上下文和模型分析结果。已推理的条目自动跳过，加 `--reindex` 可强制重新推理。
 
 > ⚠ 仅从改动生效后新收到的图片才能成功缓存。已有索引中的旧图片（QQ CDN 链接）大概率已过期。
 
@@ -162,7 +165,7 @@ const ctx5 = getStickerContext(msgId, session, 5);
 | `bun run listen` | 前台运行监听器 |
 | `bun run simulate` | 模拟重放（零成本评估 prompt） |
 | `bun run index-stickers` | 扫描并索引表情包到 data/stickers/ |
-| `bun run infer-stickers` | 对 data/stickers/ 中的图片调用视觉模型分析含义 |
+| `bun run infer-stickers` | 扫描索引，调用视觉模型推理，结果写入 data/inferences/，含 --reindex 选项 |
 | `bun run replay` | 重放历史消息并调 LLM |
 | `bun run start-agent` | 后台启动 agent |
 | `bun run stop-agent` | 停止 agent |
