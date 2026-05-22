@@ -17,7 +17,9 @@
  *   REPLY_CHANCE         回复概率 0-1，默认 0.3（仅非 @ 消息生效）
  *   BOT_QQ               Bot 自身 QQ 号（从 listen data 的 selfId 可知为 3042160393）
  *   DRY_RUN              默认为 true，仅模拟回复不上报发送，设为 false 时才实际发消息
- *   VISION_MODEL         视觉模型名，默认 deepseek-v4-flash（与 LLM 共享 API Key）
+ *   VISION_MODEL         视觉模型名，默认 deepseek-v4-flash
+ *   VISION_BASE_URL      视觉 API 地址，默认同 LLM_BASE_URL（可设为
+ *                        http://127.0.0.1:11444/v1 使用本地 Ollama）
  */
 
 import { readFileSync, existsSync, readdirSync } from "node:fs";
@@ -36,6 +38,7 @@ const REPLY_CHANCE = parseFloat(process.env.REPLY_CHANCE || "0.3");
 const DRY_RUN = process.env.DRY_RUN !== "false"; // 默认 true，仅模拟
 const MAX_CONTEXT = 30; // 加载最近 N 条消息作为上下文
 const VISION_MODEL = process.env.VISION_MODEL || "deepseek-v4-flash";
+const VISION_BASE_URL = (process.env.VISION_BASE_URL || LLM_BASE_URL).replace(/\/+$/, "");
 
 const RAW_DIR = resolve(import.meta.dirname, "../data/raw");
 
@@ -179,12 +182,14 @@ async function describeImage(cqMatch: string): Promise<string | null> {
   const dataUri = `data:${img.mime};base64,${img.base64}`;
 
   try {
-    const res = await fetch(`${LLM_BASE_URL.replace(/\/+$/, "")}/chat/completions`, {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (LLM_API_KEY) headers["Authorization"] = `Bearer ${LLM_API_KEY}`;
+
+    const res = await fetch(`${VISION_BASE_URL}/chat/completions`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${LLM_API_KEY}`,
-      },
+      headers,
       body: JSON.stringify({
         model: VISION_MODEL,
         messages: [{
@@ -239,12 +244,14 @@ function buildContext(entries: ListenEntry[]): string {
 async function callLlm(messages: { role: string; content: string }[]): Promise<string> {
   const url = `${LLM_BASE_URL.replace(/\/+$/, "")}/chat/completions`;
 
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (LLM_API_KEY) headers["Authorization"] = `Bearer ${LLM_API_KEY}`;
+
   const res = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${LLM_API_KEY}`,
-    },
+    headers,
     body: JSON.stringify({
       model: LLM_MODEL,
       messages,
@@ -477,8 +484,7 @@ function connect(): void {
 
 function main(): void {
   if (!LLM_API_KEY) {
-    console.error("请设置 LLM_API_KEY 环境变量");
-    process.exit(1);
+    log("LLM_API_KEY 未设置，视觉功能依赖本地 Ollama 时可能正常工作");
   }
 
   if (!existsSync(RAW_DIR)) {
@@ -489,6 +495,7 @@ function main(): void {
   }
 
   log(`dry-run=${DRY_RUN}（${DRY_RUN ? "仅模拟，不会实际发送消息" : "会实际发送消息到群聊"}）`);
+  log(`vision: ${VISION_MODEL} @ ${VISION_BASE_URL}`);
 
   connect();
 
