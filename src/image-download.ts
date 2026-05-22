@@ -30,3 +30,19 @@ export async function downloadImage(url: string): Promise<DownloadedImage | null
     return null;
   }
 }
+
+/**
+ * 如果图片是 GIF 格式，用 sharp 转为 JPEG（第一帧）。
+ * Gemma4 等模型不支持 GIF 输入。
+ */
+export async function gifToJpeg(base64: string, mime: string): Promise<DownloadedImage> {
+  if (mime !== "image/gif") return { base64, mime };
+  try {
+    const sharp = (await import("sharp")).default;
+    const buf = Buffer.from(base64, "base64");
+    const jpeg = await sharp(buf).jpeg({ quality: 85 }).toBuffer();
+    return { base64: jpeg.toString("base64"), mime: "image/jpeg" };
+  } catch {
+    return { base64, mime };
+  }
+}

@@ -32,7 +32,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, write
 import { join, resolve } from "node:path";
 import { computeDHash } from "./phash";
 import { cleanVisionDescription } from "./clean-vision";
-import { downloadImage } from "./image-download";
+import { downloadImage, gifToJpeg } from "./image-download";
+import { parseAtUsers, hasAtAll, stripCqCodes, estimateMsgType } from "./cq-codes";
 
 import {
   getSystemPrompt,
@@ -119,45 +120,7 @@ function log(msg: string): void {
   console.error(`[${ts()}] [agent] ${msg}`);
 }
 
-/** 从 OneBot raw_message 中提取被 @ 的 QQ 列表 */
-function parseAtUsers(raw: string): number[] {
-  const ids: number[] = [];
-  const re = /\[CQ:at,qq=(\d+)\]/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(raw)) !== null) {
-    ids.push(Number(m[1]));
-  }
-  return ids;
-}
-
-/** 检查是否 @全体成员 */
-function hasAtAll(raw: string): boolean {
-  return /\[CQ:at,qq=all\]/.test(raw);
-}
-
-/** 剥离 CQ 码，提取纯文本内容 */
-function stripCqCodes(raw: string): string {
-  return raw
-    .replace(/\[CQ:[^\]]*\]/g, "")
-    .trim();
-}
-
-/** 粗略判断消息类型：纯文本 / 纯表情 / 纯图片 / 混合 */
-function estimateMsgType(raw: string): "text" | "face" | "image" | "mixed" {
-  const cqTypes = [...raw.matchAll(/\[CQ:(\w+),/g)].map((m) => m[1]);
-  if (cqTypes.length === 0) return "text";
-
-  // 如果有 CQ 码之外的文字内容，不可能是 pure face/image
-  const stripped = stripCqCodes(raw);
-  if (stripped.length > 0) return "mixed";
-
-  if (cqTypes.every((t) => t === "face")) return "face";
-  if (cqTypes.every((t) => t === "image")) return "image";
-  if (cqTypes.every((t) => t === "face" || t === "image")) return "mixed";
-  return "mixed";
-}
-
-/** 简单中文停用词 */
+// ── 配置 ────────────────────────────────────────────────
 const STOPWORDS = new Set([
   "的", "了", "是", "我", "你", "他", "她", "它", "在", "有",
   "不", "就", "也", "都", "还", "这", "那", "什么", "怎么",
@@ -236,22 +199,6 @@ function parseFirstImageUrl(raw: string): string | null {
 }
 
 // cleanVisionDescription 已通过 import 导入（实现在 clean-vision.ts）
-
-/**
- * 如果图片是 GIF 格式，用 sharp 转为 JPEG（第一帧）。
- * Gemma4 等模型不支持 GIF 输入。
- */
-async function gifToJpeg(base64: string, mime: string): Promise<{ base64: string; mime: string }> {
-  if (mime !== "image/gif") return { base64, mime };
-  try {
-    const sharp = (await import("sharp")).default;
-    const buf = Buffer.from(base64, "base64");
-    const jpeg = await sharp(buf).jpeg({ quality: 85 }).toBuffer();
-    return { base64: jpeg.toString("base64"), mime: "image/jpeg" };
-  } catch {
-    return { base64, mime }; // fallback: 原样返回
-  }
-}
 
 /** 调用视觉模型回答一个问题，返回回答文本，失败返回 null */
 export async function callVision(query: string, base64: string, mime: string): Promise<string | null> {

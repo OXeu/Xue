@@ -28,7 +28,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join, resolve } from "node:path";
 import { computeDHash } from "./phash";
 import { cleanVisionDescription } from "./clean-vision";
-import { downloadImage } from "./image-download";
+import { downloadImage, gifToJpeg } from "./image-download";
+import { parseAtUsers, hasAtAll, stripCqCodes, estimateMsgType } from "./cq-codes";
 import {
   getSystemPrompt,
   getScenarioPrompt,
@@ -107,34 +108,6 @@ interface ListenEntry {
 }
 
 // ── 工具函数 ────────────────────────────────────────────
-
-function parseAtUsers(raw: string): number[] {
-  const ids: number[] = [];
-  const re = /\[CQ:at,qq=(\d+)\]/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(raw)) !== null) {
-    ids.push(Number(m[1]));
-  }
-  return ids;
-}
-
-function hasAtAll(raw: string): boolean {
-  return /\[CQ:at,qq=all\]/.test(raw);
-}
-
-function stripCqCodes(raw: string): string {
-  return raw.replace(/\[CQ:[^\]]*\]/g, "").trim();
-}
-
-function estimateMsgType(raw: string): "text" | "face" | "image" | "mixed" {
-  const cqTypes = [...raw.matchAll(/\[CQ:(\w+),/g)].map((m) => m[1]);
-  if (cqTypes.length === 0) return "text";
-  const stripped = stripCqCodes(raw);
-  if (stripped.length > 0) return "mixed";
-  if (cqTypes.every((t) => t === "face")) return "face";
-  if (cqTypes.every((t) => t === "image")) return "image";
-  return "mixed";
-}
 
 function isImageMsg(e: ListenEntry): boolean {
   return e.type === "image" || (e.segmentTypes?.includes("image") ?? false);
@@ -460,19 +433,6 @@ export async function quickDecideSilence(
 }
 
 // ── 图片描述 ────────────────────────────────────────────
-
-/** 如果图片是 GIF 格式，用 sharp 转为 JPEG（第一帧）。Gemma4 等模型不支持 GIF。 */
-async function gifToJpeg(base64: string, mime: string): Promise<{ base64: string; mime: string }> {
-  if (mime !== "image/gif") return { base64, mime };
-  try {
-    const sharp = (await import("sharp")).default;
-    const buf = Buffer.from(base64, "base64");
-    const jpeg = await sharp(buf).jpeg({ quality: 85 }).toBuffer();
-    return { base64: jpeg.toString("base64"), mime: "image/jpeg" };
-  } catch {
-    return { base64, mime };
-  }
-}
 
 /** 用视觉模型描述图片（从 base64），返回纯描述文本 */
 async function describeImageFromBase64(question: string, base64: string, mime: string): Promise<string | null> {
