@@ -33,6 +33,7 @@ import { resolve } from "node:path";
 import { computeDHash } from "./phash";
 import { cleanVisionDescription } from "./clean-vision";
 import { downloadImage, gifToJpeg } from "./image-download";
+import { getCachedImageByUrl } from "./image-cache";
 import { parseAtUsers, hasAtAll, stripCqCodes, estimateMsgType } from "./cq-codes";
 import {
   extractKeywords,
@@ -624,7 +625,12 @@ function connect(): void {
       if (/\[CQ:image/.test(rawMessage)) {
         const imgUrl = parseFirstImageUrl(rawMessage);
         if (imgUrl) {
-          const downloaded = await downloadImage(imgUrl);
+          let downloaded = await downloadImage(imgUrl);
+          // CDN URL 过期 → 尝试本地缓存（listen.ts 可能已缓存）
+          if (!downloaded) {
+            const cached = getCachedImageByUrl(imgUrl);
+            if (cached) downloaded = cached;
+          }
           if (downloaded) {
             const phash = await computeDHash(downloaded.base64, downloaded.mime);
             _imageCache.set(phash, downloaded);
@@ -679,6 +685,11 @@ function connect(): void {
     if (/\[CQ:image/.test(rawMessage)) {
       const imgUrl = parseFirstImageUrl(rawMessage);
       if (imgUrl) downloadedImg = await downloadImage(imgUrl);
+      // CDN URL 过期 → 尝试本地缓存（listen.ts 可能已缓存）
+      if (!downloadedImg && imgUrl) {
+        const cached = getCachedImageByUrl(imgUrl);
+        if (cached) downloadedImg = cached;
+      }
       if (downloadedImg) {
         currentPhash = await computeDHash(downloadedImg.base64, downloadedImg.mime);
         _imageCache.set(currentPhash, downloadedImg);

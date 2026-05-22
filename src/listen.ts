@@ -15,7 +15,7 @@
 
 import { appendFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { saveCachedImage } from "./image-cache";
+import { saveCachedImage, saveUrlIndex } from "./image-cache";
 import { computeDHash } from "./phash";
 
 // ── 类型 ────────────────────────────────────────────────
@@ -227,6 +227,7 @@ export async function cacheEntryImage(url: string, _session: string, _msgId: num
     const base64 = Buffer.from(buf).toString("base64");
     const phash = await computeDHash(base64, mime);
     saveCachedImage(phash, base64, mime);
+    saveUrlIndex(url, phash);
     console.log(`[${ts()}] [cache] cached image phash=${phash}`);
     return phash;
   } catch {
