@@ -29,6 +29,7 @@ import { join, resolve } from "node:path";
 import { computeDHash } from "./phash";
 import { cleanVisionDescription } from "./clean-vision";
 import { downloadImage, gifToJpeg } from "./image-download";
+import { getCachedImage } from "./image-cache";
 import { parseAtUsers, stripCqCodes, estimateMsgType } from "./cq-codes";
 import {
   extractKeywords,
@@ -107,6 +108,7 @@ interface ListenEntry {
   replyTo?: number;
   segmentTypes?: string[];
   imageUrls?: string[];
+  phash?: string[];
 }
 
 // ── 工具函数 ────────────────────────────────────────────
@@ -338,20 +340,38 @@ async function main(): Promise<void> {
       const summary = kws.length > 0 ? `当前话题：${kws.join("、")}` : "";
       const atmosphereTag = analyzeAtmosphere(ctxEntries);
 
-      // 如果是图片消息，先下载并做单轮视觉描述
+      // 如果是图片消息，先尝试从本地缓存加载（phash），再回退到 CDN 下载
       let imageDesc = "";
       if (isImageMsg(e)) {
-        const imgUrl = e.imageUrls?.[0] ?? null;
-        if (imgUrl) {
-          const downloaded = await downloadImage(imgUrl);
-          if (downloaded) {
-            const phash = await computeDHash(downloaded.base64, downloaded.mime);
-            _imageCache.set(phash, downloaded);
-            if (VISION_MODEL) {
-              const answer = await describeImageFromBase64("用一条简短的自然语句描述这张图片的核心内容：主体是什么、情绪或氛围如何、是否包含文字。不要模板化的描述。", downloaded.base64, downloaded.mime);
-              if (answer && !isVagueDescription(answer)) {
-                imageDesc = answer;
-              }
+        let downloaded: { base64: string; mime: string } | null = null;
+        let phash: string | null = null;
+
+        // 优先用 entry.phash 查找本地缓存
+        if (e.phash?.[0]) {
+          const cached = getCachedImage(e.phash[0]);
+          if (cached) {
+            downloaded = cached;
+            phash = e.phash[0];
+          }
+        }
+
+        // 本地缓存未命中，回退到 CDN URL 下载
+        if (!downloaded) {
+          const imgUrl = e.imageUrls?.[0] ?? null;
+          if (imgUrl) {
+            downloaded = await downloadImage(imgUrl);
+            if (downloaded) {
+              phash = await computeDHash(downloaded.base64, downloaded.mime);
+            }
+          }
+        }
+
+        if (downloaded && phash) {
+          _imageCache.set(phash, downloaded);
+          if (VISION_MODEL) {
+            const answer = await describeImageFromBase64("用一条简短的自然语句描述这张图片的核心内容：主体是什么、情绪或氛围如何、是否包含文字。不要模板化的描述。", downloaded.base64, downloaded.mime);
+            if (answer && !isVagueDescription(answer)) {
+              imageDesc = answer;
             }
           }
         }
