@@ -374,10 +374,25 @@ async function downloadImage(url: string): Promise<{ base64: string; mime: strin
   }
 }
 
+/** 如果图片是 GIF 格式，用 sharp 转为 JPEG（第一帧）。Gemma4 等模型不支持 GIF。 */
+async function gifToJpeg(base64: string, mime: string): Promise<{ base64: string; mime: string }> {
+  if (mime !== "image/gif") return { base64, mime };
+  try {
+    const sharp = (await import("sharp")).default;
+    const buf = Buffer.from(base64, "base64");
+    const jpeg = await sharp(buf).jpeg({ quality: 85 }).toBuffer();
+    return { base64: jpeg.toString("base64"), mime: "image/jpeg" };
+  } catch {
+    return { base64, mime };
+  }
+}
+
 /** 用视觉模型描述图片（从 base64），返回纯描述文本 */
 async function describeImageFromBase64(question: string, base64: string, mime: string): Promise<string | null> {
   if (!VISION_MODEL) return null;
-  const dataUri = `data:${mime};base64,${base64}`;
+  // GIF → JPEG 转换（Gemma4 等模型不支持 GIF）
+  const converted = await gifToJpeg(base64, mime);
+  const dataUri = `data:${converted.mime};base64,${converted.base64}`;
   try {
     // Ollama 的 auth 是 "Bearer ollama"，OpenAI 兼容则用真正的 API key
     const visionKey = VISION_BASE_URL.includes("127.0.0.1") || VISION_BASE_URL.includes("localhost") ? "ollama" : (process.env.LLM_API_KEY || "");

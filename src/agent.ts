@@ -219,6 +219,22 @@ async function downloadImage(url: string): Promise<{ base64: string; mime: strin
 
 // cleanVisionDescription 已通过 import 导入（实现在 clean-vision.ts）
 
+/**
+ * 如果图片是 GIF 格式，用 sharp 转为 JPEG（第一帧）。
+ * Gemma4 等模型不支持 GIF 输入。
+ */
+async function gifToJpeg(base64: string, mime: string): Promise<{ base64: string; mime: string }> {
+  if (mime !== "image/gif") return { base64, mime };
+  try {
+    const sharp = (await import("sharp")).default;
+    const buf = Buffer.from(base64, "base64");
+    const jpeg = await sharp(buf).jpeg({ quality: 85 }).toBuffer();
+    return { base64: jpeg.toString("base64"), mime: "image/jpeg" };
+  } catch {
+    return { base64, mime }; // fallback: 原样返回
+  }
+}
+
 /** 调用视觉模型回答一个问题，返回回答文本，失败返回 null */
 export async function callVision(query: string, base64: string, mime: string): Promise<string | null> {
   const visionModel = process.env.VISION_MODEL || VISION_MODEL || "";
@@ -227,7 +243,9 @@ export async function callVision(query: string, base64: string, mime: string): P
   const visionBaseUrl = (process.env.VISION_BASE_URL || VISION_BASE_URL).replace(/\/+$/, "");
   const apiKey = process.env.LLM_API_KEY || LLM_API_KEY || "ollama";
 
-  const dataUri = `data:${mime};base64,${base64}`;
+  // GIF → JPEG 转换
+  const converted = await gifToJpeg(base64, mime);
+  const dataUri = `data:${converted.mime};base64,${converted.base64}`;
 
   try {
     const headers: Record<string, string> = {
