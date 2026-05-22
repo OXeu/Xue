@@ -340,8 +340,10 @@ export async function callVision(query: string, base64: string, mime: string): P
 
 // ── 上下文 ──────────────────────────────────────────────
 
-/** 构建可读的上下文文本。图片消息显示 [图片] 标记。 */
-export function buildContext(entries: ListenEntry[]): string {
+/** 构建可读的上下文文本。图片消息显示 [图片] 标记。
+ *  replyMap 可选，提供 msgId → { sender, text } 映射，将 (回复 msgId)
+ *  替换为 (回复 发送者 "原文摘要")。 */
+export function buildContext(entries: ListenEntry[], replyMap?: Map<number, { sender: string; text: string }>): string {
   if (entries.length === 0) return "（暂无历史消息）";
 
   return entries
@@ -351,7 +353,11 @@ export function buildContext(entries: ListenEntry[]): string {
         hour: "2-digit", minute: "2-digit", timeZone: "Asia/Shanghai",
       });
       const at = e.atUsers.length > 0 ? ` @${e.atUsers.join(",")}` : "";
-      const reply = e.replyTo ? ` (回复 ${e.replyTo})` : "";
+      const reply = e.replyTo
+        ? (replyMap?.has(e.replyTo)
+            ? ` (回复 ${replyMap.get(e.replyTo)!.sender} "${replyMap.get(e.replyTo)!.text}")`
+            : ` (回复 ${e.replyTo})`)
+        : "";
       const text = e.text || `[${e.type}]`;
       const imgMark = e.segmentTypes?.includes("image") ? " [图片]" : "";
       return `[${time}] ${name}${at}${reply}: ${text}${imgMark}`;
@@ -585,7 +591,17 @@ function connect(): void {
 
     // 加载上下文（轻量操作，先做，后续沉默检查要用）
     const recent = loadRecentMessages(RAW_DIR, entry.session, MAX_CONTEXT);
-    const contextText = buildContext(recent);
+    // 构建 replyTo 查找表：msgId → { sender, text }，用于上下文显示引用原文
+    const replyMap = new Map<number, { sender: string; text: string }>();
+    for (const e of recent) {
+      if (e.msgId) {
+        replyMap.set(e.msgId, {
+          sender: e.card || e.nickname,
+          text: (e.text || "").slice(0, 80),
+        });
+      }
+    }
+    const contextText = buildContext(recent, replyMap);
     const keywords = extractKeywords(recent, 5);
     const topicSummary = keywords.length > 0
       ? `当前话题：${keywords.join("、")}`
