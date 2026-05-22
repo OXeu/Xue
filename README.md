@@ -11,7 +11,7 @@ rin-research-humanize/
 ├── src/
 │   ├── agent.ts            # 主 agent：WS 监听 → 上下文 → LLM → 回复
 │   ├── listen.ts           # 消息监听器（只收不发，记录 JSONL 作为上下文和历史）
-│   ├── index-stickers.ts   # 表情包索引器：从历史消息中提取图片/表情并附上下文
+│   ├── index-stickers.ts   # 表情包索引器：扫描 data/raw/，记录 msgId/session/type/content
 │   ├── simulate.ts         # 模拟重放：不调 LLM，只输出决策和 prompt，零成本评估
 │   ├── replay.ts           # 重放历史消息：调 LLM 生成实际回复，用于验证
 │   ├── clean-vision.ts     # 清洗视觉模型的 reasoning 输出，提取纯文本描述
@@ -103,6 +103,29 @@ LLM_API_KEY=sk-xxx MAX_MSGS=22 bun run replay
 # 3. 观察回复是否收敛（短句、少语气词、自然）
 ```
 
+## 表情包索引
+
+从历史消息中识别图片/表情消息，建立可检索的索引。
+
+```bash
+bun run index-stickers                    # 全量索引所有会话
+SESSION=group_313214094 bun run index-stickers  # 指定会话
+```
+
+索引文件位于 `data/stickers/{session}.jsonl`，每条记录只存 msgId、session、type、content、昵称，**不存上下文**。上下文在需要时通过 `getStickerContext()` 从 `data/raw/` 反查：
+
+```ts
+import { getStickerContext } from "./src/index-stickers";
+
+// 前后各 3 条
+const ctx = getStickerContext(msgId, session);
+
+// 自定义窗口大小（前后各 5 条）
+const ctx5 = getStickerContext(msgId, session, 5);
+```
+
+窗口大小可在使用时动态调整，无需重新索引。
+
 ## 环境变量
 
 | 变量 | 说明 | 默认值 |
@@ -130,5 +153,5 @@ LLM_API_KEY=sk-xxx MAX_MSGS=22 bun run replay
 | `bun run start-agent` | 后台启动 agent |
 | `bun run stop-agent` | 停止 agent |
 | `bun run status-agent` | 检查 agent 状态 |
-| `bun test` | 运行测试（83 例） |
+| `bun test` | 运行测试（87 例） |
 | `bun run typecheck` | TypeScript 类型检查 |
