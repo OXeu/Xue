@@ -85,6 +85,31 @@ describe("parseMessage", () => {
     expect(result.imageUrls).toEqual([]);
   });
 
+  test("string 格式含 [CQ:reply,id=N] 时提取 replyTo 并剥离 CQ 码", () => {
+    const result = parseMessage("[CQ:reply,id=12345]这个 logo 怎么样");
+
+    expect(result.replyTo).toBe(12345);
+    expect(result.text).toBe("这个 logo 怎么样");
+    expect(result.segmentTypes).toEqual(["reply"]);
+    expect(result.imageUrls).toEqual([]);
+  });
+
+  test("string 格式含 [CQ:at] 时提取 atUsers", () => {
+    const result = parseMessage("[CQ:at,qq=3042160393] 你好");
+
+    expect(result.atUsers).toEqual([3042160393]);
+    expect(result.text).toBe("你好");
+    expect(result.segmentTypes).toEqual(["at"]);
+  });
+
+  test("string 格式含 [CQ:image] 时提取 imageUrls 并剥离 CQ 码", () => {
+    const result = parseMessage("看这个 [CQ:image,url=https://example.com/img.jpg]");
+
+    expect(result.imageUrls).toEqual(["https://example.com/img.jpg"]);
+    expect(result.text).toBe("看这个");
+    expect(result.segmentTypes).toEqual(["image"]);
+  });
+
   // ── 边界情况 ──
 
   test("空数组 → text 空字符串，imageUrls 空数组", () => {

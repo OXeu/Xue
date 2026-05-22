@@ -120,10 +120,28 @@ export function parseMessage(message: string | unknown[]): {
     imageUrls: [] as string[],
   };
 
-  // string 格式：直接作为纯文本
+  // string 格式：从 CQ 码中解析 at / reply，剥离 CQ 码后得到纯文本
   if (typeof message === "string") {
-    result.text = message;
-    result.segmentTypes = ["text"];
+    // 提取回复引用
+    const replyMatch = message.match(/\[CQ:reply,id=(\d+)\]/);
+    if (replyMatch) result.replyTo = Number(replyMatch[1]);
+    // 提取 @ 列表
+    const atRe = /\[CQ:at,qq=(\d+)\]/g;
+    let m: RegExpExecArray | null;
+    while ((m = atRe.exec(message)) !== null) {
+      result.atUsers.push(Number(m[1]));
+    }
+    // 提取图片 URL
+    const imgRe = /\[CQ:image,([^\]]*)\]/g;
+    while ((m = imgRe.exec(message)) !== null) {
+      const urlMatch = m[1].match(/url=([^,]*)/);
+      if (urlMatch) result.imageUrls.push(decodeURIComponent(urlMatch[1]));
+    }
+    // 收集段类型
+    const cqTypes = [...message.matchAll(/\[CQ:(\w+),/g)].map((x) => x[1]);
+    result.segmentTypes = cqTypes.length > 0 ? cqTypes : ["text"];
+    // 剥离所有 CQ 码得到纯文本
+    result.text = message.replace(/\[CQ:[^\]]*\]/g, "").trim();
     return result;
   }
 
