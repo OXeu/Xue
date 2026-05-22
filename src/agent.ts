@@ -490,6 +490,23 @@ export function loadPhashMap(session: string): Map<number, string> {
   return map;
 }
 
+/** 从 data/inferences/{session}.jsonl 中查找某个 msgId 的缓存视觉描述。
+ *  当图片下载失败时，用此兜底注入 [图片描述: ...] 到消息文本中。 */
+export function loadCachedInference(session: string, msgId: number): string | null {
+  const path = join(_inferencesDir, `${session}.jsonl`);
+  if (!existsSync(path)) return null;
+  const lines = readFileSync(path, "utf8").trim().split("\n").filter(Boolean);
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry.msgId === msgId && entry.inference && typeof entry.inference === "string") {
+        return entry.inference;
+      }
+    } catch { /* skip */ }
+  }
+  return null;
+}
+
 export function buildContext(entries: ListenEntry[]): string {
   return buildContextWithPhashIds(entries, new Map());
 }
@@ -725,6 +742,7 @@ function connect(): void {
     // 如果有图片，先下载图片（后续由 Agent 自主决定问什么）
     let downloadedImg: { base64: string; mime: string } | null = null;
     let currentPhash: string | null = null;
+    let cachedDescription: string | null = null;
     if (/\[CQ:image/.test(rawMessage)) {
       const imgUrl = parseFirstImageUrl(rawMessage);
       if (imgUrl) downloadedImg = await downloadImage(imgUrl);
@@ -741,6 +759,9 @@ function connect(): void {
             "utf8",
           );
         } catch {}
+      } else if (imgUrl) {
+        // 下载失败，查 data/inferences 中是否有缓存描述
+        cachedDescription = loadCachedInference(entry.session, entry.msgId);
       }
     }
 
@@ -775,14 +796,18 @@ function connect(): void {
       }
 
       // 初始消息列表
+      const descSuffix = cachedDescription
+        ? ` [图片描述: ${cachedDescription.slice(0, 80)}]`
+        : "";
+      const messageText = `${cleanText}${descSuffix}`;
       const messages: any[] = [{
         role: "system",
         content: systemParts.filter(Boolean).join("\n"),
       }, {
         role: "user",
         content: downloadedImg
-          ? `【群聊上下文】\n${contextText}\n\n【新消息（含图片 #${currentPhash}）】${senderName}: ${cleanText}\n\n请以 ${BOT_NAME} 的身份自然回复。`
-          : `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${cleanText}\n\n请以 ${BOT_NAME} 的身份自然回复。`,
+          ? `【群聊上下文】\n${contextText}\n\n【新消息（含图片 #${currentPhash}）】${senderName}: ${messageText}\n\n请以 ${BOT_NAME} 的身份自然回复。`
+          : `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${messageText}\n\n请以 ${BOT_NAME} 的身份自然回复。`,
       }];
 
       // 视觉循环：Agent 通过 tool calling 询问图片内容，可以多轮追问
