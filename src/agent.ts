@@ -28,7 +28,7 @@
  *                        http://127.0.0.1:11444/v1 使用本地 Ollama）
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { computeDHash } from "./phash";
 import { cleanVisionDescription } from "./clean-vision";
@@ -295,6 +295,22 @@ export async function callVision(query: string, base64: string, mime: string): P
   } catch {
     return null;
   }
+}
+
+/** 检查描述是否过于模糊，不适合持久化 */
+function isVagueDescription(desc: string): boolean {
+  if (!desc || desc.length < 15) return true;
+  const trimmed = desc.trim().toLowerCase();
+  // 匹配以"一个/一张/一种"开头的极简描述
+  if (/^(an?|a|the|one|some)\s+(image|picture|photo|screenshot|character|anime|manga|illustration|artwork|scene|view|shot)/i.test(trimmed)) return true;
+  // 匹配"a single image of" / "the user is asking" 等无信息量开头
+  if (/^a single/i.test(trimmed)) return true;
+  if (/^the user/i.test(trimmed)) return true;
+  if (/^an anime/i.test(trimmed) && trimmed.length < 25) return true;
+  if (/^i need to/i.test(trimmed)) return true;
+  // 描述中必须含具体内容词（中文或英文名词）
+  if (!/[\u4e00-\u9fff]/.test(desc) && !/\b(character|person|animal|scene|object|building|landscape|text|logo|meme|表情|角色|人物|场景|动物|文字|图片|画面|背景)\b/i.test(desc)) return true;
+  return false;
 }
 
 // ── 上下文 ──────────────────────────────────────────────
@@ -759,17 +775,29 @@ function connect(): void {
                 const answer = await callVision(question, cachedImg.base64, cachedImg.mime);
                 toolResult = answer || "(分析失败)";
                 log(`[describe_image a] ${toolResult.slice(0, 100)}`);
-                // 持久化视觉描述到 inferences 文件，供未来上下文使用
-                if (answer) {
+                // 持久化视觉描述到 inferences 文件（只保存有信息量的描述，后轮覆盖前轮）
+                if (answer && !isVagueDescription(answer)) {
                   const inferredMsgId = _phashToMsgId.get(id);
                   if (inferredMsgId) {
                     try {
                       ensureInferencesDir();
-                      appendFileSync(
-                        join(_inferencesDir, `${entry.session}.jsonl`),
-                        JSON.stringify({ msgId: inferredMsgId, session: entry.session, phash: id, inference: answer, timestamp: new Date().toISOString() }) + "\n",
-                        "utf8",
-                      );
+                      const infPath = join(_inferencesDir, `${entry.session}.jsonl`);
+                      // 读取现有行，过滤掉同 msgId 的旧 inference 条目
+                      let lines: string[] = [];
+                      if (existsSync(infPath)) {
+                        lines = readFileSync(infPath, "utf8").trim().split("\n").filter(Boolean);
+                      }
+                      const filtered = lines.filter(line => {
+                        try {
+                          const parsed = JSON.parse(line);
+                          return parsed.msgId !== inferredMsgId || !parsed.inference;
+                        } catch { return true; }
+                      });
+                      filtered.push(JSON.stringify({
+                        msgId: inferredMsgId, session: entry.session, phash: id,
+                        inference: answer, timestamp: new Date().toISOString()
+                      }));
+                      writeFileSync(infPath, filtered.join("\n") + "\n", "utf8");
                     } catch {}
                   }
                 }
