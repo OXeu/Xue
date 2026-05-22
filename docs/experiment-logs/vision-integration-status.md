@@ -1,8 +1,8 @@
 # 视觉功能集成状态
 
 **日期**: 2026-05-22
-**agent 版本**: commit `201c66b`
-**状态**: ✅ 代码已部署，因模型不支持视觉暂为 fallback 模式
+**agent 版本**: commit `281ff6e`
+**状态**: ✅ 已启用（gemma4:26b via Ollama，auth + reasoning 修复后）
 
 ---
 
@@ -10,10 +10,10 @@
 
 ```
 [消息含 CQ:image] → parseFirstImageUrl() → downloadImage() → describeImage() → 注入 prompt
-                         ❌ 无 url              ❌ 失败        ❌ 模型不支持     → fallback 到"看不到图片"
+                         ❌ 无 url              ❌ 失败        ❌ API 异常     → fallback 到"看不到图片"
 ```
 
-三步骤各自独立容错，任何一步失败返回 `null`，agent 按原有逻辑处理（不假装看到图片）。
+三步骤各自独立容错，任何一步失败返回 `null`，agent 按原有逻辑处理。
 
 ## 实现
 
@@ -33,44 +33,38 @@ VISION_MODEL=gemma4:26b
 VISION_BASE_URL=http://127.0.0.1:11444/v1
 ```
 
-- `VISION_MODEL` — 视觉模型名，可独立于文本模型
-- `VISION_BASE_URL` — 视觉 API 端点，默认回退到 `LLM_BASE_URL`
-- Auth header 按需发送（有 `LLM_API_KEY` 才带，Ollama 不用）
+- Auth: 始终发送 `Authorization: Bearer ${LLM_API_KEY || "ollama"}`。无 API Key 时默认用 `ollama`（Ollama 接受任意 Bearer token）
+- 响应解析: gemma4 是推理模型，描述内容在 `reasoning` 字段。代码优先读 `reasoning`，回退到 `content`
 
-## 当前限制
+## 验证结果
 
-**gemma4:26b 不支持视觉。** 模型文件检查确认：
-
-- 只有 `RENDERER gemma4`，无 `mmproj`（视觉编码器）
-- Ollama 原生 API 返回"请提供图片"但未实际理解
-- OpenAI 兼容 API 报 `image: unknown format`
-
-本地其他模型（qwen3.5:27b、glm-ocr:latest 等）同样无视觉能力。
-
-## 验证
-
-管线三步骤端到端测试通过：
+**测试条件**: 构造模拟 CQ 码 `[CQ:image,url=https://picsum.photos/400/300]`，走完整管线
 
 ```
-Step 1 parseFirstImageUrl: ✅  从 CQ 码提取 url
-Step 2 downloadImage:      ✅  下载 → base64（27KB JPEG）
-Step 3 describeImage:      ❌  模型不支持，返回 null → graceful fallback
+Step 1 parseFirstImageUrl ✅ url: https://picsum.photos/400/300...
+Step 2 downloadImage      ✅ image/jpeg 35KB
+Step 3 describeImage      ✅ 
+  原始: Input: A black and white image of grass/plants...
+  描述: Grass, blades of grass, vegetation.
 ```
 
-agent 运行正常（PID 1414265），启动日志确认配置加载：
+**结论**: `describeImage` 返回非空描述，视觉管线端到端正常。prompt 中将注入 `【消息中包含一张图片，描述如下：Grass, blades of grass, vegetation。回复时可以结合图片内容。】`
 
-```
-vision: gemma4:26b @ http://127.0.0.1:11444/v1
-```
+## 关键修复历程
 
-## 下一步
+| 问题 | 修复 | commit |
+|------|------|--------|
+| auth header 缺失（Ollama 需要 Bearer token） | 始终发送 `Bearer ${LLM_API_KEY \|\| "ollama"}` | `281ff6e` |
+| gemma4 是推理模型，content 为空 | 从 `reasoning` 字段提取描述 | `281ff6e` |
+| VISION_MODEL 默认值为误导的 deepseek-v4-flash | 改为空（禁用），显式配置后才启用 | `fc6a570` |
 
-安装一个支持视觉的模型即可启用：
+## 当前 agent 状态
 
-```bash
-ollama pull llama3.2-vision:11b   # 推荐，支持良好
-ollama pull qwen2.5-vl:7b         # 中文理解强
-ollama pull minicpm-v:8b          # 轻量
-```
+- **PID**: 1419967
+- **启动日志**: `vision: gemma4:26b @ http://127.0.0.1:11444/v1`
+- **dry-run**: 自重启后无新消息流入，尚未产生带图片描述的 dry-run 回复
 
-装好后改 `.env` 中的 `VISION_MODEL`，重启 agent，无需改代码。
+## 后续方向
+
+- 图片描述来自 reasoning 字段，原始输出含分析过程。后续可优化提取逻辑，只取第一句有效描述
+- 等待群聊图片消息自然流入，观察实际场景中的描述质量
