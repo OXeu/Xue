@@ -463,7 +463,13 @@ function loadRecentMessages(sessionId: string, limit: number): ListenEntry[] {
   if (!existsSync(path)) return [];
 
   const lines = readFileSync(path, "utf8").trim().split("\n").filter(Boolean);
-  return lines.slice(-limit).map((l) => JSON.parse(l) as ListenEntry);
+  const entries: ListenEntry[] = [];
+  for (const l of lines) {
+    try {
+      entries.push(JSON.parse(l) as ListenEntry);
+    } catch { /* skip corrupt lines */ }
+  }
+  return entries.slice(-limit);
 }
 
 /** 加载某会话已缓存的图片 phash 记录，返回 msgId → phash 映射表。

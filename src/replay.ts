@@ -301,7 +301,13 @@ function loadRecentMessages(sessionId: string, limit: number): ListenEntry[] {
   const path = join(RAW_DIR, `${sessionId}.jsonl`);
   if (!existsSync(path)) return [];
   const lines = readFileSync(path, "utf8").trim().split("\n").filter(Boolean);
-  return lines.slice(-limit).map((l) => JSON.parse(l) as ListenEntry);
+  const entries: ListenEntry[] = [];
+  for (const l of lines) {
+    try {
+      entries.push(JSON.parse(l) as ListenEntry);
+    } catch { /* skip corrupt lines */ }
+  }
+  return entries.slice(-limit);
 }
 
 /** 加载某会话已缓存的 phash 记录，返回 msgId → phash 映射表。
@@ -595,7 +601,12 @@ async function main(): Promise<void> {
   }
 
   const lines = readFileSync(filePath, "utf8").trim().split("\n").filter(Boolean);
-  const allEntries: ListenEntry[] = lines.map((l) => JSON.parse(l) as ListenEntry);
+  const allEntries: ListenEntry[] = [];
+  for (const l of lines) {
+    try {
+      allEntries.push(JSON.parse(l) as ListenEntry);
+    } catch { /* skip corrupt lines */ }
+  }
 
   // 按时间排序
   allEntries.sort((a, b) => a.time - b.time);
