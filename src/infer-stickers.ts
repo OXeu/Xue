@@ -21,6 +21,7 @@ import { join, resolve } from "node:path";
 import { getStickerContext, StickerEntry } from "./index-stickers";
 import { cleanVisionDescription } from "./clean-vision";
 import { hasCache, getCachedImage, saveCachedImage } from "./image-cache";
+import { computeDHash, isDuplicate } from "./phash";
 
 const STICKERS_DIR = resolve(import.meta.dirname, "../data/stickers");
 const RAW_DIR = resolve(import.meta.dirname, "../data/raw");
@@ -54,6 +55,8 @@ export interface InferenceEntry {
   inference: string | null;
   /** 推理时间戳（ISO） */
   timestamp: string;
+  /** 感知哈希（dHash），用于相似图片去重 */
+  phash?: string;
 }
 
 export interface SessionSummary {
@@ -231,8 +234,22 @@ export async function processSession(
   const lines = readFileSync(stickerPath, "utf8").trim().split("\n").filter(Boolean);
   const stickers: StickerEntry[] = lines.map((l) => JSON.parse(l) as StickerEntry);
 
-  // 加载已有推理结果（--reindex 时跳过）
+  // 加载已有推理结果的 msgId 集合和 pHash 列表
   const inferredIds = reindex ? new Set<number>() : loadInferredIds(session);
+  const knownPhashes: string[] = [];
+
+  if (!reindex) {
+    const infPath = join(_inferencesDir, `${session}.jsonl`);
+    if (existsSync(infPath)) {
+      const lines = readFileSync(infPath, "utf8").trim().split("\n").filter(Boolean);
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line) as InferenceEntry;
+          if (entry.phash) knownPhashes.push(entry.phash);
+        } catch { /* skip corrupt lines */ }
+      }
+    }
+  }
 
   for (const sticker of stickers) {
     if (total >= maxStickers) return { total, success, fail, skipped: cdnSkipped };
@@ -268,6 +285,20 @@ export async function processSession(
       continue;
     }
 
+    // 计算感知哈希，与已有结果去重
+    let phash: string | undefined;
+    try {
+      phash = await computeDHash(img.base64, img.mime);
+    } catch {
+      // 哈希计算失败（如图片损坏），仍继续推理
+    }
+
+    if (phash && isDuplicate(phash, knownPhashes)) {
+      console.log(`  ⏭ 跳过（与已有图片相似，phash 距离 ≤ 3）`);
+      dedupSkipped++;
+      continue;
+    }
+
     console.log(`  分析中...`);
     const raw = await inferStickerMeaning(img.base64, img.mime, formatContext(ctx));
     const inference = raw ? cleanVisionDescription(raw) : null;
@@ -290,8 +321,10 @@ export async function processSession(
         context: ctx,
         inference,
         timestamp: new Date().toISOString(),
+        phash,
       };
       saveInference(entry);
+      if (phash) knownPhashes.push(phash);
     } else {
       console.log(`  含义: (分析失败)`);
       fail++;
