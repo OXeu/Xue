@@ -74,7 +74,7 @@ test("buildSessionProfile 从包含高频词的消息中正确提取关键词", 
     msgs.push("秋招招了将近 300 人");
     writeLines(session, msgs);
 
-    const result = buildSessionProfile(session);
+    const result = buildSessionProfile(session, RAW_DIR);
     expect(result).toContain("群聊特征：");
     // 高频短语应出现在结果中（关键词提取返回连续中文字词序列）
     expect(result).toContain("web开发项目需要改进");
@@ -92,7 +92,7 @@ test("消息少于 10 条时返回空字符串", () => {
     for (let i = 0; i < 5; i++) {
       appendLine(session, `测试消息 ${i}`);
     }
-    const result = buildSessionProfile(session);
+    const result = buildSessionProfile(session, RAW_DIR);
     expect(result).toBe("");
   } finally {
     cleanFile(session);
@@ -107,7 +107,7 @@ test("正好 10 条消息时返回非空结果", () => {
     for (let i = 0; i < 10; i++) {
       appendLine(session, `关于 Web开发的话题 ${i}`);
     }
-    const result = buildSessionProfile(session);
+    const result = buildSessionProfile(session, RAW_DIR);
     expect(result.length).toBeGreaterThan(0);
     expect(result).toContain("群聊特征：");
   } finally {
@@ -117,12 +117,12 @@ test("正好 10 条消息时返回非空结果", () => {
 
 test("私聊 session 返回空字符串", () => {
   const session = "private_12345";
-  const result = buildSessionProfile(session);
+  const result = buildSessionProfile(session, RAW_DIR);
   expect(result).toBe("");
 });
 
 test("不存在的 session 返回空字符串", () => {
-  const result = buildSessionProfile("test_profile_nonexistent");
+  const result = buildSessionProfile("test_profile_nonexistent", RAW_DIR);
   expect(result).toBe("");
 });
 
@@ -134,7 +134,7 @@ test("所有消息内容相同时仍能提取出关键词", () => {
     const msgs = Array(15).fill("每天都在写代码调试 bug");
     writeLines(session, msgs);
 
-    const result = buildSessionProfile(session);
+    const result = buildSessionProfile(session, RAW_DIR);
     expect(result).toContain("群聊特征：");
     // 关键词提取返回连续中文字词序列，较长短语会被整体匹配
     expect(result).toContain("每天都在写代码调试");
@@ -152,7 +152,7 @@ test("消息仅含停用词时返回风格行但无关键词行", () => {
     const msgs = Array(15).fill("的 了 是 我 你 他 在 有 不 就 也 都");
     writeLines(session, msgs);
 
-    const result = buildSessionProfile(session);
+    const result = buildSessionProfile(session, RAW_DIR);
     // 关键词行为空（全是停用词），但风格行仍然存在
     expect(result).not.toContain("群聊特征");
     expect(result).toContain("风格：");
@@ -169,7 +169,7 @@ test("消息含 CQ 码时被正确剥离，关键词提取不受影响", () => {
     const msgs = Array(12).fill("[CQ:at,qq=12345] 项目架构需要重构");
     writeLines(session, msgs);
 
-    const result = buildSessionProfile(session);
+    const result = buildSessionProfile(session, RAW_DIR);
     expect(result).toContain("群聊特征：");
     // CQ 码被剥离后，纯文本被正确提取
     expect(result).toContain("项目架构需要重构");
@@ -188,8 +188,8 @@ test("多次调用不污染缓存或影响生产数据", () => {
     writeLines(session, msgs);
 
     // 调用两次，结果应一致
-    const r1 = buildSessionProfile(session);
-    const r2 = buildSessionProfile(session);
+    const r1 = buildSessionProfile(session, RAW_DIR);
+    const r2 = buildSessionProfile(session, RAW_DIR);
     expect(r1).toBe(r2);
 
     // 验证文件未被修改

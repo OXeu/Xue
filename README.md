@@ -15,8 +15,10 @@ rin-research-humanize/
 │   ├── simulate.ts         # 模拟重放：不调 LLM，只输出决策和 prompt，零成本评估
 │   ├── replay.ts           # 重放历史消息：调 LLM 生成实际回复，用于验证
 │   ├── clean-vision.ts     # 清洗视觉模型的 reasoning 输出，提取纯文本描述
-│   ├── image-cache.ts      # 图片缓存（data/images/），供 replay 复用
-│   └── image-download.ts   # 图片下载（fetch → base64 → mime），供 agent/replay 复用
+│   ├── image-cache.ts      # 图片缓存（data/prod/images/），供 replay 复用
+│   ├── image-download.ts   # 图片下载（fetch → base64 → mime），供 agent/replay 复用
+│   ├── cq-codes.ts         # CQ 码解析工具（@列表、@全体、纯文本剥离、消息类型估算）
+│   └── chat-utils.ts       # agent/replay 共享工具（关键词、气氛、风格、消息加载、视觉描述持久化）
 ├── scripts/
 │   ├── start-agent.sh      # 后台启动 agent（写 PID、日志重定向）
 │   ├── stop-agent.sh       # 停止 agent
