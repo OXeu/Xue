@@ -611,6 +611,60 @@ function sendGroupMsg(ws: WebSocket, groupId: number, message: string): void {
   ws.send(payload);
 }
 
+// ── 快速沉默决策（低确定性触发器用） ───────────────────
+
+/** 对低确定性触发（random/bystander/media），先问模型有没有话想说。
+ *  返回 SILENT 或模型生成的简短回复。 */
+async function quickDecideSilence(
+  contextText: string,
+  senderName: string,
+  messageText: string,
+  scenarioKey: string,
+  topicSummary: string,
+): Promise<string | null> {
+  const url = `${LLM_BASE_URL.replace(/\/+$/, "")}/chat/completions`;
+  const scenarioPrompt = getScenarioPrompt(scenarioKey, BOT_NAME);
+
+  const systemContent = [
+    getSystemPrompt(BOT_NAME),
+    getReplyRules(),
+    topicSummary,
+    `\n下面是这个群最近的消息：`,
+    `【${scenarioPrompt}】`,
+  ].filter(Boolean).join("\n");
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${LLM_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: LLM_MODEL,
+        messages: [
+          { role: "system", content: systemContent },
+          {
+            role: "user",
+            content: `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${messageText}\n\n有自然的话就说出来，没有就只回复 SILENT。`,
+          },
+        ],
+        max_tokens: 60,
+        temperature: 0.8,
+      }),
+    });
+
+    if (!res.ok) return null;
+
+    const data = (await res.json()) as {
+      choices: { message: { content?: string | null } }[];
+    };
+    return data.choices?.[0]?.message?.content?.trim() ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // ── 回复决策 ────────────────────────────────────────────
 
 interface ReplyDecision {
@@ -742,7 +796,42 @@ function connect(): void {
     const senderName = entry.card || entry.nickname;
     log(`msg <${senderName}> in ${entry.session} [${decision.reason}]: ${cleanText.slice(0, 80)}`);
 
-    // 如果有图片，先下载图片（后续由 Agent 自主决定问什么）
+    // 加载上下文（轻量操作，先做，后续沉默检查要用）
+    const recent = loadRecentMessages(entry.session, MAX_CONTEXT);
+    const phashMap = loadPhashMap(entry.session);
+    const contextText = buildContextWithPhashIds(recent, phashMap);
+    const keywords = extractKeywords(recent, 5);
+    const topicSummary = keywords.length > 0
+      ? `当前话题：${keywords.join("、")}`
+      : "";
+
+    const scenarioKey = isPrivate ? "private" : decision.reason;
+
+    // 低确定性触发：先做快速沉默检查，避免不必要的图片下载和视觉循环
+    const lowCertainty = scenarioKey === "random" || scenarioKey === "bystander" || scenarioKey === "media";
+    if (lowCertainty) {
+      const quickReply = await quickDecideSilence(
+        contextText, senderName, cleanText, scenarioKey, topicSummary,
+      );
+      if (!quickReply || quickReply.toUpperCase() === "SILENT") {
+        log(`silent (model chose not to speak)`);
+        return;
+      }
+      // 模型有话说，直接发送简短回复
+      if (DRY_RUN) {
+        log(`[dry-run] would reply to ${entry.session}: ${quickReply.slice(0, 200)}`);
+      } else if (isPrivate) {
+        ws!.send(JSON.stringify({ action: "send_private_msg", params: { user_id: userId, message: quickReply } }));
+      } else {
+        sendGroupMsg(ws!, data.group_id as number, quickReply);
+      }
+      log(`replied: ${quickReply.slice(0, 100)}`);
+      return;
+    }
+
+    // 高确定性触发（at-self / mentioned / at-all / private）：原有流程
+
+    // 如果有图片，先下载图片
     let downloadedImg: { base64: string; mime: string } | null = null;
     let currentPhash: string | null = null;
     let cachedDescription: string | null = null;
@@ -762,24 +851,14 @@ function connect(): void {
           );
         } catch {}
       } else if (imgUrl) {
-        // 下载失败，查 data/prod/inferences 中是否有缓存描述
         cachedDescription = loadCachedInference(entry.session, entry.msgId);
       }
     }
-
-    // 加载上下文 + 话题摘要 + 图片 phash 映射
-    const recent = loadRecentMessages(entry.session, MAX_CONTEXT);
-    const phashMap = loadPhashMap(entry.session);
+    // 将当前图片的 phash 注入上下文
     if (currentPhash) {
-      phashMap.set(entry.msgId, currentPhash); // 确保当前图片在内存 map 中
+      phashMap.set(entry.msgId, currentPhash);
     }
-    const contextText = buildContextWithPhashIds(recent, phashMap);
-    const keywords = extractKeywords(recent, 5);
-    const topicSummary = keywords.length > 0
-      ? `当前话题：${keywords.join("、")}`
-      : "";
 
-    const scenarioKey = isPrivate ? "private" : decision.reason;
     const roleInstruction = `【${getScenarioPrompt(scenarioKey, BOT_NAME)}】`;
 
     try {

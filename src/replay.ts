@@ -374,6 +374,58 @@ function roleInstruction(reason: string): string {
   return prompt ? `【${prompt}】` : `【${getScenarioPrompt("default", BOT_NAME)}】`;
 }
 
+// ── 快速沉默决策 ─────────────────────────────────────
+
+async function quickDecideSilence(
+  contextText: string,
+  senderName: string,
+  messageText: string,
+  scenarioKey: string,
+  topicSummary: string,
+): Promise<string | null> {
+  const url = `${LLM_BASE_URL.replace(/\/+$/, "")}/chat/completions`;
+  const scenarioPrompt = getScenarioPrompt(scenarioKey, BOT_NAME);
+
+  const systemContent = [
+    getSystemPrompt(BOT_NAME),
+    getReplyRules(),
+    topicSummary,
+    `\n下面是这个群最近的消息：`,
+    `【${scenarioPrompt}】`,
+  ].filter(Boolean).join("\n");
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${LLM_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: LLM_MODEL,
+        messages: [
+          { role: "system", content: systemContent },
+          {
+            role: "user",
+            content: `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${messageText}\n\n有自然的话就说出来，没有就只回复 SILENT。`,
+          },
+        ],
+        max_tokens: 60,
+        temperature: 0.8,
+      }),
+    });
+
+    if (!res.ok) return null;
+
+    const data = (await res.json()) as {
+      choices: { message: { content?: string | null } }[];
+    };
+    return data.choices?.[0]?.message?.content?.trim() ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // ── 图片描述 ────────────────────────────────────────────
 
 /** 下载图片并 base64 编码 */
@@ -633,141 +685,27 @@ async function main(): Promise<void> {
       contextSize: contextEntries.length,
     };
 
-    // 如果决定回复，调 LLM（工具调用模式）
+    // 如果决定回复，做快速沉默检查
     if (decision.should) {
       const phashMap = loadPhashMap(SESSION);
+      const ctxEntries = allEntries.slice(
+        Math.max(0, allEntries.indexOf(e) - 30),
+        allEntries.indexOf(e),
+      );
+      const ctxText = buildContext(ctxEntries, phashMap);
+      const kws = extractKeywords(ctxEntries, 5);
+      const summary = kws.length > 0 ? `当前话题：${kws.join("、")}` : "";
 
-      // 如果是图片消息，下载图片并计算 phash
-      let hasImage = false;
-      let currentPhash: string | null = null;
-      let cachedDescription: string | null = null;
-      if (isImageMsg(e)) {
-        // 尝试从 imageUrls 或 CQ 码中获取 URL
-        const imgUrl = e.imageUrls?.[0] ?? null;
-        if (imgUrl) {
-          const downloaded = await downloadImage(imgUrl);
-          if (downloaded) {
-            hasImage = true;
-            currentPhash = await computeDHash(downloaded.base64, downloaded.mime);
-            _imageCache.set(currentPhash, downloaded);
-            // 保存 phash 到 inference 文件
-            try {
-              if (!existsSync(_inferencesDir)) mkdirSync(_inferencesDir, { recursive: true });
-              appendFileSync(
-                join(_inferencesDir, `${SESSION}.jsonl`),
-                JSON.stringify({ msgId: e.msgId, session: SESSION, phash: currentPhash, timestamp: new Date().toISOString() }) + "\n",
-                "utf8",
-              );
-            } catch {}
-            phashMap.set(e.msgId, currentPhash);
-          } else {
-            // 下载失败，查 data/prod/inferences 中是否有缓存描述
-            cachedDescription = loadCachedInference(SESSION, e.msgId);
-          }
-        }
-      }
-
-      const contextText = buildContext(contextEntries, phashMap);
-      const keywords = extractKeywords(contextEntries, 5);
-      const topicSummary = keywords.length > 0 ? `当前话题：${keywords.join("、")}` : "";
-
-      try {
-        // 构建 system prompt
-        const systemParts = [
-          getSystemPrompt(BOT_NAME),
-          getReplyRules(),
-          buildSessionProfile(SESSION),
-          styleGuidance(buildSessionProfile(SESSION)),
-          topicSummary,
-          `\n下面是这个群最近的消息：`,
-          roleInstruction(decision.reason),
-        ];
-        if (hasImage && VISION_MODEL) {
-          // 从 prompts/vision.md 获取工具描述
-          const visionPath = resolve(import.meta.dirname, "../prompts/vision.md");
-          let visionPrompt = "";
-          try { visionPrompt = readFileSync(visionPath, "utf8"); } catch {}
-          if (visionPrompt) systemParts.push(`\n\n${visionPrompt}`);
-        }
-
-        // 如有缓存描述，在消息文本中注入 [图片描述: ...]
-        const descSuffix = cachedDescription
-          ? ` [图片描述: ${cachedDescription.slice(0, 80)}]`
-          : "";
-        const messageText = `${cleanText || "[图片]"}${descSuffix}`;
-
-        const messages: any[] = [
-          { role: "system", content: systemParts.filter(Boolean).join("\n") },
-          {
-            role: "user",
-            content: hasImage && currentPhash
-            ? `【群聊上下文】\n${contextText}\n\n【新消息（含图片 #${currentPhash}）】${senderName}: ${messageText}\n\n想回复就直接说，觉得没什么可说的就保持沉默。`
-            : `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${messageText}\n\n想回复就直接说，觉得没什么可说的就保持沉默。`,
-          },
-        ];
-
-        // 工具调用循环
-        let finalReply: string | null = null;
-        let rounds = 0;
-        let toolCallCount = 0;
-
-        while (!finalReply && rounds < 5) {
-          rounds++;
-          const tools = (hasImage && VISION_MODEL) ? [DESCRIBE_IMAGE_TOOL] : undefined;
-          const llmResult = await callLlmWithTools(messages, tools);
-
-          if (llmResult.tool_calls && llmResult.tool_calls.length > 0 && VISION_MODEL) {
-            // 使用原始 message（包含 reasoning_content 等 DeepSeek 需要的字段）
-            if (llmResult.rawMessage) {
-              messages.push({ ...llmResult.rawMessage, role: "assistant" });
-            }
-            for (const tc of llmResult.tool_calls) {
-              if (tc.function.name === "describe_image") {
-                let args: { id: string; question: string };
-                try {
-                  args = JSON.parse(tc.function.arguments);
-                } catch {
-                  if (!llmResult.rawMessage) {
-                    messages.push({ role: "assistant", content: null, tool_calls: [tc] });
-                  }
-                  messages.push({ role: "tool", tool_call_id: tc.id, content: "参数解析失败" });
-                  continue;
-                }
-                const { id, question } = args;
-                const cachedImg = _imageCache.get(id);
-                let toolResult: string;
-                if (cachedImg) {
-                  const answer = await describeImageFromBase64(question, cachedImg.base64, cachedImg.mime);
-                  toolResult = answer || "(分析失败)";
-                  // 持久化视觉描述到 inferences 文件（只保存有信息量的描述，后轮覆盖前轮）
-                  if (answer && !isVagueDescription(answer)) {
-                    persistBestDescription(_inferencesDir, SESSION, e.msgId, id, answer);
-                  }
-                } else {
-                  toolResult = "（该图片数据已过期，无法查看）";
-                }
-                toolCallCount++;
-                messages.push({ role: "tool", tool_call_id: tc.id, content: toolResult });
-              }
-            }
-          } else if (llmResult.content) {
-            finalReply = llmResult.content;
-          } else {
-            break;
-          }
-        }
-
-        if (finalReply) {
-          result.reply = finalReply;
-          console.log(`[${result.time}] ${result.sender} [${decision.reason}]`);
-          console.log(`  触发: ${cleanText.slice(0, 60) || "(图片)"}`);
-          if (toolCallCount > 0) console.log(`  工具调用: ${toolCallCount} 次`);
-          console.log(`  回复: ${finalReply.slice(0, 120)}`);
-          console.log(`  话题: ${topicSummary || "(无)"}`);
-          console.log();
-        }
-      } catch (err) {
-        console.error(`  LLM error: ${err instanceof Error ? err.message : String(err)}`);
+      const quickReply = await quickDecideSilence(ctxText, senderName, cleanText, decision.reason, summary);
+      if (!quickReply || quickReply.toUpperCase() === "SILENT") {
+        console.log(`[${result.time}] ${result.sender} [silent] ${cleanText.slice(0, 60)}`);
+      } else {
+        result.reply = quickReply;
+        console.log(`[${result.time}] ${result.sender} [${decision.reason}]`);
+        console.log(`  触发: ${cleanText.slice(0, 60) || "(图片)"}`);
+        console.log(`  回复: ${quickReply.slice(0, 120)}`);
+        console.log(`  话题: ${summary || "(无)"}`);
+        console.log();
       }
     }
 
