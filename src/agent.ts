@@ -280,7 +280,7 @@ async function describeImage(
  * - 问句适中 → 可适当使用问句
  * - 问句偏少 → 减少问句
  */
-function styleGuidance(profile: string): string {
+export function styleGuidance(profile: string): string {
   if (!profile.includes("风格：")) return "";
 
   const guide: string[] = [];

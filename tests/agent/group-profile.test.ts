@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { buildSessionProfile } from "../../src/agent";
+import { buildSessionProfile, styleGuidance } from "../../src/agent";
 
 const RAW_DIR = resolve(import.meta.dirname, "../../data/raw");
 
@@ -199,4 +199,30 @@ test("多次调用不污染缓存或影响生产数据", () => {
   } finally {
     cleanFile(session);
   }
+});
+
+// ── styleGuidance ─────────────────────────────────────────
+
+test("styleGuidance: 空风格行（不含风格信息）返回空字符串", () => {
+  const result = styleGuidance("群聊特征：code、token、api");
+  expect(result).toBe("");
+});
+
+test("styleGuidance: 空字符串输入返回空字符串", () => {
+  const result = styleGuidance("");
+  expect(result).toBe("");
+});
+
+test("styleGuidance: 三个维度均为「适中」时指导应传递保持自然", () => {
+  const result = styleGuidance("风格：短句适中 | 语气词适中 | 问句适中");
+  expect(result).toContain("回复尽量简短");
+  expect(result).toContain("语气自然即可");
+  expect(result).toContain("可适当使用问句");
+});
+
+test("styleGuidance: 短句偏多 + 语气词偏少 + 问句偏少组合下生成正确的三句指导", () => {
+  const result = styleGuidance("风格：短句偏多 | 语气词偏少 | 问句偏少");
+  expect(result).toContain("回复请尽量控制在 20 字以内");
+  expect(result).toContain("保持简洁语气");
+  expect(result).toContain("减少问句");
 });
