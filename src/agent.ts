@@ -28,7 +28,7 @@
  *                        http://127.0.0.1:11444/v1 使用本地 Ollama）
  */
 
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { computeDHash } from "./phash";
 import { cleanVisionDescription } from "./clean-vision";
@@ -76,6 +76,43 @@ const VISION_MODEL = process.env.VISION_MODEL || "";
 const VISION_BASE_URL = (process.env.VISION_BASE_URL || LLM_BASE_URL).replace(/\/+$/, "");
 
 const RAW_DIR = resolve(import.meta.dirname, "../data/prod/raw");
+const CONFIG_PATH = resolve(import.meta.dirname, "../config/session-config.json");
+
+interface SessionConfig {
+  reply: boolean;
+}
+
+/** 加载会话配置。文件不存在或格式错误时返回空对象。 */
+function loadSessionConfig(): Record<string, SessionConfig> {
+  try {
+    if (!existsSync(CONFIG_PATH)) return {};
+    const raw = readFileSync(CONFIG_PATH, "utf8");
+    const parsed = JSON.parse(raw) as Record<string, { reply?: boolean }>;
+    const result: Record<string, SessionConfig> = {};
+    for (const [key, val] of Object.entries(parsed)) {
+      if (val && typeof val.reply === "boolean") {
+        result[key] = { reply: val.reply };
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+const _sessionConfig = loadSessionConfig();
+
+/**
+ * 检查某个会话是否允许真实回复（非 dry-run）。
+ * 优先级：会话配置 > 全局 DRY_RUN。
+ * 未在配置中的会话使用全局 DRY_RUN 行为。
+ */
+function canReplyReal(sessionId: string): boolean {
+  if (!DRY_RUN) return true; // 全局非 dry-run，所有会话都真实回复
+  const cfg = _sessionConfig[sessionId];
+  if (cfg !== undefined) return cfg.reply; // 会话配置覆写
+  return false; // 全局 dry-run 且无配置 → dry-run
+}
 
 /** 临时图片缓存：pHash → base64 + mime。在单次 onmessage 调用期间有效。 */
 const _imageCache = new Map<string, { base64: string; mime: string }>();
@@ -466,7 +503,7 @@ function connect(): void {
         return;
       }
       // 模型有话说，直接发送简短回复
-      if (DRY_RUN) {
+      if (!canReplyReal(entry.session)) {
         log(`[dry-run] would reply to ${entry.session}: ${quickReply.slice(0, 200)}`);
       } else if (isPrivate) {
         ws!.send(JSON.stringify({ action: "send_private_msg", params: { user_id: userId, message: quickReply } }));
@@ -587,7 +624,7 @@ function connect(): void {
       }
 
       if (finalReply) {
-        if (DRY_RUN) {
+        if (!canReplyReal(entry.session)) {
           log(`[dry-run] would reply to ${entry.session}: ${finalReply.slice(0, 200)}`);
         } else if (isPrivate) {
           const payload = JSON.stringify({
