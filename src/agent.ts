@@ -33,7 +33,7 @@ import { resolve } from "node:path";
 import { computeDHash } from "./phash";
 import { cleanVisionDescription } from "./clean-vision";
 import { downloadImage, gifToJpeg } from "./image-download";
-import { getCachedImageByUrl } from "./image-cache";
+import { getCachedImage, getCachedImageByUrl } from "./image-cache";
 import { parseAtUsers, hasAtAll, stripCqCodes, estimateMsgType } from "./cq-codes";
 import {
   extractKeywords,
@@ -254,6 +254,8 @@ interface ListenEntry {
   atUsers: number[];
   replyTo?: number;
   segmentTypes?: string[];
+  imageUrls?: string[];
+  phash?: string[];
 }
 
 // ── 工具 ────────────────────────────────────────────────
@@ -274,6 +276,38 @@ function parseFirstImageUrl(raw: string): string | null {
   if (!m) return null;
   const urlMatch = m[1].match(/url=([^,]*)/);
   return urlMatch ? decodeURIComponent(urlMatch[1]) : null;
+}
+
+function getPersistedImageEntry(recent: ListenEntry[], msgId: number): ListenEntry | null {
+  for (let i = recent.length - 1; i >= 0; i--) {
+    if (recent[i]?.msgId === msgId) return recent[i];
+  }
+  return null;
+}
+
+async function resolveMessageImage(
+  persistedEntry: ListenEntry | null,
+  rawMessage: string,
+): Promise<{ downloaded: { base64: string; mime: string } | null; phash: string | null }> {
+  if (persistedEntry?.phash?.[0]) {
+    const cached = getCachedImage(persistedEntry.phash[0]);
+    if (cached) {
+      return { downloaded: cached, phash: persistedEntry.phash[0] };
+    }
+  }
+
+  const imgUrl = persistedEntry?.imageUrls?.[0] ?? parseFirstImageUrl(rawMessage);
+  if (!imgUrl) return { downloaded: null, phash: null };
+
+  let downloaded = await downloadImage(imgUrl);
+  if (!downloaded) {
+    const cached = getCachedImageByUrl(imgUrl);
+    if (cached) downloaded = cached;
+  }
+  if (!downloaded) return { downloaded: null, phash: null };
+
+  const phash = await computeDHash(downloaded.base64, downloaded.mime);
+  return { downloaded, phash };
 }
 
 // cleanVisionDescription 已通过 import 导入（实现在 clean-vision.ts）
@@ -606,6 +640,7 @@ function connect(): void {
       ? `当前话题：${keywords.join("、")}`
       : "";
     const atmosphereTag = analyzeAtmosphere(recent);
+    const persistedEntry = getPersistedImageEntry(recent, entry.msgId);
 
     const scenarioKey = isPrivate ? "private" : decision.reason;
 
@@ -621,20 +656,11 @@ function connect(): void {
       let imgPhash: string | null = null;
       // 如果有图片，下载并缓存（供下游复用），但不预识别
       if (/\[CQ:image/.test(rawMessage)) {
-        const imgUrl = parseFirstImageUrl(rawMessage);
-        if (imgUrl) {
-          let downloaded = await downloadImage(imgUrl);
-          // CDN URL 过期 → 尝试本地缓存（listen.ts 可能已缓存）
-          if (!downloaded) {
-            const cached = getCachedImageByUrl(imgUrl);
-            if (cached) downloaded = cached;
-          }
-          if (downloaded) {
-            const phash = await computeDHash(downloaded.base64, downloaded.mime);
-            imgPhash = phash;
-            _imageCache.set(phash, downloaded);
-            _recentUserImage.set(_recentUserKey, { downloaded, phash, time: Date.now() });
-          }
+        const { downloaded, phash } = await resolveMessageImage(persistedEntry, rawMessage);
+        if (downloaded && phash) {
+          imgPhash = phash;
+          _imageCache.set(phash, downloaded);
+          _recentUserImage.set(_recentUserKey, { downloaded, phash, time: Date.now() });
         }
       }
 
@@ -670,15 +696,10 @@ function connect(): void {
     let downloadedImg: { base64: string; mime: string } | null = null;
     let currentPhash: string | null = null;
     if (/\[CQ:image/.test(rawMessage)) {
-      const imgUrl = parseFirstImageUrl(rawMessage);
-      if (imgUrl) downloadedImg = await downloadImage(imgUrl);
-      // CDN URL 过期 → 尝试本地缓存（listen.ts 可能已缓存）
-      if (!downloadedImg && imgUrl) {
-        const cached = getCachedImageByUrl(imgUrl);
-        if (cached) downloadedImg = cached;
-      }
-      if (downloadedImg) {
-        currentPhash = await computeDHash(downloadedImg.base64, downloadedImg.mime);
+      const resolved = await resolveMessageImage(persistedEntry, rawMessage);
+      downloadedImg = resolved.downloaded;
+      currentPhash = resolved.phash;
+      if (downloadedImg && currentPhash) {
         _imageCache.set(currentPhash, downloadedImg);
         _recentUserImage.set(_recentUserKey, { downloaded: downloadedImg, phash: currentPhash, time: Date.now() });
       }
