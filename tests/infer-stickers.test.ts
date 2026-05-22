@@ -7,6 +7,7 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
+import sharp from "sharp";
 import {
   setInferencesDir,
   setStickersDir,
@@ -16,6 +17,7 @@ import {
   processSession,
 } from "../src/infer-stickers";
 import type { InferenceEntry } from "../src/infer-stickers";
+import { computeDHashFromBuffer, hammingDistance } from "../src/phash";
 import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 
@@ -499,5 +501,165 @@ describe("infer-stickers main flow integration", () => {
     // 两条都是同一个 msgId，但第二条是新推理结果
     expect(entries[0].msgId).toBe(94001);
     expect(entries[1].msgId).toBe(94001);
+  });
+
+  // ── pHash 去重集成测试 ──────────────────────────────
+
+  /** 生成一张带简单图案的图片 buffer，内容可控用于 pHash 碰撞测试 */
+  async function makePatternImage(offset: number): Promise<Buffer> {
+    const w = 100, h = 100;
+    const raw = Buffer.alloc(w * h * 3);
+    // 灰色渐变背景 + 一个白色方块，位置由 offset 控制
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const idx = (y * w + x) * 3;
+        // 渐变灰底
+        const gray = 40 + Math.floor((x + y) * 0.5) % 60;
+        raw[idx] = gray;
+        raw[idx + 1] = gray;
+        raw[idx + 2] = gray;
+        // 白色方块
+        const bx = 5 + (offset % 50);
+        const by = 5 + (offset * 7 % 50);
+        if (Math.abs(x - bx) < 8 && Math.abs(y - by) < 8) {
+          raw[idx] = 255; raw[idx + 1] = 255; raw[idx + 2] = 255;
+        }
+      }
+    }
+    return await sharp(raw, { raw: { width: w, height: h, channels: 3 } })
+      .jpeg()
+      .toBuffer();
+  }
+
+  /** 创建一个 mock fetch，图片请求返回指定 buffer，视觉 API 返回模拟结果 */
+  function makeMockFetch(imgBuffer: Buffer): typeof globalThis.fetch {
+    let callCount = 0;
+    return ((url: string | URL | Request): Promise<Response> => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+      if (urlStr.includes("/v1/chat/completions")) {
+        callCount++;
+        const text = callCount === 1
+          ? "A funny reaction meme expressing amusement."
+          : "A shocked surprised face meme.";
+        return Promise.resolve(new Response(JSON.stringify({
+          choices: [{ message: { content: text } }],
+        }), { status: 200, headers: { "content-type": "application/json" } }));
+      }
+      return Promise.resolve(new Response(imgBuffer, {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      }));
+    }) as typeof globalThis.fetch;
+  }
+
+  test("pHash 去重：相似图片被跳过", async () => {
+    const session = "phash_skip";
+
+    // 生成图片 A 和极微调后的图片 B（保证 dHash 距离 ≤ 3）
+    // 使用相同 offset 生成的两张图先 JPEG 编码再解码，压缩噪声会导致微小差异
+    const imgA = await makePatternImage(42);
+    const hashA = await computeDHashFromBuffer(imgA);
+
+    // 找一张与 hashA 距离 ≤ 3 的图：从偏移 0~200 扫描
+    let similarImg: Buffer | null = null;
+    let similarHash = "";
+    for (let off = 0; off < 200; off++) {
+      const buf = await makePatternImage(off);
+      const h = await computeDHashFromBuffer(buf);
+      if (hammingDistance(hashA, h) <= 3) {
+        similarImg = buf;
+        similarHash = h;
+        break;
+      }
+    }
+    if (!similarImg) throw new Error("Could not find a similar image (dist ≤ 3)");
+
+    // 写一条已知推理记录（带 phash）
+    saveInference(makeEntry({
+      msgId: 95001, session, inference: "First result.",
+      phash: hashA,
+    }));
+
+    // 准备 sticker 索引（1 条图片消息）
+    createStickerIndex(session, [
+      {
+        msgId: 95002, time: 1716500000, session,
+        userId: 205001, nickname: "DedupUser", card: undefined,
+        type: "image", content: "https://multimedia.example.com/similar.jpg", text: "",
+      },
+    ]);
+    createRawFile(session, [
+      { msgId: 95002, time: 1716500000, userId: 205001, nickname: "DedupUser", text: "" },
+    ]);
+
+    // 用相似图片的 mock 运行
+    const origFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = makeMockFetch(similarImg);
+      await processSession(session);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+
+    // 验证：推理文件只有 1 条（原始的那条），新条目被 pHash 去重跳过
+    const infPath = join(inferencesDir, `${session}.jsonl`);
+    const lines = readFileSync(infPath, "utf8").trim().split("\n").filter(Boolean);
+    expect(lines.length).toBe(1);
+    const entry = JSON.parse(lines[0]) as InferenceEntry;
+    expect(entry.msgId).toBe(95001); // 仍是初始条目
+  });
+
+  test("pHash 去重：不相似图片正常推理", async () => {
+    const session = "phash_no_skip";
+
+    // 生成两张 dHash 距离 > 3 的图片
+    const imgA = await makePatternImage(42);
+    const hashA = await computeDHashFromBuffer(imgA);
+
+    let distantImg: Buffer | null = null;
+    for (let off = 0; off < 200; off++) {
+      const buf = await makePatternImage(off);
+      const h = await computeDHashFromBuffer(buf);
+      if (hammingDistance(hashA, h) > 3) {
+        distantImg = buf;
+        break;
+      }
+    }
+    if (!distantImg) throw new Error("Could not find a distant image (dist > 3)");
+
+    // 写一条已知推理记录（带 phash）
+    saveInference(makeEntry({
+      msgId: 96001, session, inference: "First result.",
+      phash: hashA,
+    }));
+
+    // 准备 sticker 索引
+    createStickerIndex(session, [
+      {
+        msgId: 96002, time: 1716600000, session,
+        userId: 206001, nickname: "NewUser", card: undefined,
+        type: "image", content: "https://multimedia.example.com/different.jpg", text: "",
+      },
+    ]);
+    createRawFile(session, [
+      { msgId: 96002, time: 1716600000, userId: 206001, nickname: "NewUser", text: "" },
+    ]);
+
+    // 用不相似图片的 mock 运行
+    const origFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = makeMockFetch(distantImg);
+      await processSession(session);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+
+    // 验证：推理文件现有 1 条 + 新增 1 条 = 2 条
+    const infPath = join(inferencesDir, `${session}.jsonl`);
+    const lines = readFileSync(infPath, "utf8").trim().split("\n").filter(Boolean);
+    expect(lines.length).toBe(2);
+    const entries = lines.map((l) => JSON.parse(l) as InferenceEntry);
+    expect(entries.some((e) => e.msgId === 96001)).toBeTrue();
+    expect(entries.some((e) => e.msgId === 96002)).toBeTrue();
   });
 });
