@@ -808,8 +808,8 @@ function connect(): void {
       }, {
         role: "user",
         content: downloadedImg
-          ? `【群聊上下文】\n${contextText}\n\n【新消息（含图片 #${currentPhash}）】${senderName}: ${messageText}\n\n请以 ${BOT_NAME} 的身份自然回复。`
-          : `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${messageText}\n\n请以 ${BOT_NAME} 的身份自然回复。`,
+          ? `【群聊上下文】\n${contextText}\n\n【新消息（含图片 #${currentPhash}）】${senderName}: ${messageText}\n\n想回复就直接说，觉得没什么可说的就保持沉默。`
+          : `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${messageText}\n\n想回复就直接说，觉得没什么可说的就保持沉默。`,
       }];
 
       // 视觉循环：Agent 通过 tool calling 询问图片内容，可以多轮追问
@@ -897,7 +897,7 @@ function connect(): void {
           log(`replied: ${finalReply.slice(0, 100)}`);
         }
       } else {
-        log("vision loop exceeded max rounds, no reply");
+        log("no reply (model chose silence or vision loop exhausted)");
       }
     } catch (err) {
       log(`LLM error: ${err instanceof Error ? err.message : String(err)}`);

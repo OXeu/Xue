@@ -701,8 +701,8 @@ async function main(): Promise<void> {
           {
             role: "user",
             content: hasImage && currentPhash
-            ? `【群聊上下文】\n${contextText}\n\n【新消息（含图片 #${currentPhash}）】${senderName}: ${messageText}\n\n请以 ${BOT_NAME} 的身份自然回复。`
-            : `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${messageText}\n\n请以 ${BOT_NAME} 的身份自然回复。`,
+            ? `【群聊上下文】\n${contextText}\n\n【新消息（含图片 #${currentPhash}）】${senderName}: ${messageText}\n\n想回复就直接说，觉得没什么可说的就保持沉默。`
+            : `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${messageText}\n\n想回复就直接说，觉得没什么可说的就保持沉默。`,
           },
         ];
 
