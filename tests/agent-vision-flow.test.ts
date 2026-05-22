@@ -637,4 +637,47 @@ describe("saveVisionInference", () => {
     const map = loadInferenceMap(session);
     expect(map.has(msgId)).toBe(false);
   });
+
+  test("全链路端到端：存推理 → 加载 → 上下文显示 [图片: 描述]", () => {
+    const session = "group_test_integration";
+    const msgId = 7777;
+    const description = "一只橘色的猫在灰色的沙发上睡觉";
+
+    // 1. 存推理
+    saveVisionInference({
+      msgId,
+      session,
+      inference: description,
+      model: "gemma4:26b",
+      timestamp: "2026-05-22T12:00:00.000Z",
+    });
+
+    // 2. loadInferenceMap 能正确读取
+    const map = loadInferenceMap(session);
+    expect(map.get(msgId)).toBe(description);
+
+    // 3. buildContextWithInferences 显示 [图片: 描述]（非纯 [图片] 标记）
+    const entry = {
+      session,
+      msgId,
+      time: 1717000000,
+      type: "image",
+      text: "",
+      userId: 100,
+      nickname: "UserA",
+      card: undefined,
+      subType: "normal",
+      selfId: 1,
+      atUsers: [],
+      replyTo: undefined,
+      segmentTypes: ["image"] as string[],
+    };
+    const ctx = buildContextWithInferences([entry], map);
+    expect(ctx).toContain(`[图片: ${description}]`);
+
+    // 4. buildContext（无推理参数）退化到纯 [图片] 标记
+    const ctxBare = buildContext([entry]);
+    expect(ctxBare).toContain("[图片]");
+    expect(ctxBare).not.toContain("[图片:]");
+  });
 });
