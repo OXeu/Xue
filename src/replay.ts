@@ -371,7 +371,8 @@ function decideReply(
   if (mentioned) return { should: Math.random() < 0.7, reason: "mentioned" };
   if (msgType === "face" || msgType === "image") return { should: Math.random() < 0.30, reason: "media" };
   if (isAtOther) return { should: Math.random() < 0.05, reason: "bystander" };
-  return { should: Math.random() < REPLY_CHANCE, reason: "random" };
+  // replay 模式下不做随机回复
+  return { should: false, reason: "no-random" };
 }
 
 function roleInstruction(reason: string): string {
