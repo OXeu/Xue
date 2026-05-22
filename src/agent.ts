@@ -173,8 +173,7 @@ async function downloadImage(url: string): Promise<{ base64: string; mime: strin
   }
 }
 
-// 清洗视觉模型的原始输出（实现在 clean-vision.ts）
-// cleanVisionDescription 已通过 import 导入
+// cleanVisionDescription 已通过 import 导入（实现在 clean-vision.ts）
 
 /** 调用视觉 LLM 描述图片，返回一句话描述，失败返回 null。
  *  若传入 session + msgId，会先查缓存，成功描述后也写入缓存。 */
