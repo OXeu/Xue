@@ -24,6 +24,7 @@
 
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { cleanVisionDescription } from "./clean-vision";
 
 // ── 配置 ────────────────────────────────────────────────
 
@@ -171,61 +172,8 @@ async function downloadImage(url: string): Promise<{ base64: string; mime: strin
   }
 }
 
-/** 清洗视觉模型的原始输出，提取纯描述内容 */
-function cleanVisionDescription(raw: string): string | null {
-  if (!raw || raw.trim().length === 0) return null;
-
-  const lines = raw.split("\n");
-  let bestDesc: string | null = null;
-
-  // 太泛的"描述"不算真的描述
-  const vagueDescs = /^(the image|this image|an image|a picture|the picture|image|picture|the photo|a photo|photo|场景|画面)\.?$/i;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    // 去掉行首标记符（* - • · 等）
-    const clean = trimmed.replace(/^[\*\-•·]\s*/, "").trim();
-    if (!clean) continue;
-
-    // Subject / 主题 —— gemma4 的"答案"行
-    const subjectMatch = clean.match(/^(Subject|主题)[:：]\s*(.+)/i);
-    if (subjectMatch) {
-      const val = subjectMatch[2].trim();
-      if (val.length >= 15 || !vagueDescs.test(val)) {
-        bestDesc = val;
-      }
-      continue;
-    }
-
-    // Input / 输入 / Image content —— 图片内容的描述行
-    const inputMatch = clean.match(/^(Input\s*(?:image)?|输入|Image\s*content)[:：]\s*(.+)/i);
-    if (inputMatch) {
-      const val = inputMatch[2].trim();
-      // 跳过描述 prompt 本身的行
-      if (
-        val.length > 5 &&
-        !/prompt|task|describe|一句话|image and a prompt|用户要求|请用/i.test(val) &&
-        !vagueDescs.test(val)
-      ) {
-        if (!bestDesc) bestDesc = val;
-      }
-      continue;
-    }
-
-    // 跳过任务/结构标签行
-    if (/^(Task|Objective|Goal|Output|Result|Answer|Summary|Description|Analysis|任务|目标|输出|结果|答案|总结|分析)[:：]/i.test(clean)) continue;
-    if (clean.length < 6) continue;
-
-    // 其他正文句（content 字段直接进来，或未匹配到已知标签的描述行）
-    // 去掉遗留的标签前缀（如 "Input image:"）
-    const stripped = clean.replace(/^(Input\s*(?:image)?|Image\s*content|Subject|Description)[:：]\s*/i, "").trim();
-    if (!bestDesc && stripped.length > 5 && !vagueDescs.test(stripped)) bestDesc = stripped;
-  }
-
-  return bestDesc && bestDesc.length > 5 && !vagueDescs.test(bestDesc) ? bestDesc : null;
-}
+// 清洗视觉模型的原始输出（实现在 clean-vision.ts）
+// cleanVisionDescription 已通过 import 导入
 
 /** 调用视觉 LLM 描述图片，返回一句话描述，失败返回 null */
 async function describeImage(cqMatch: string): Promise<string | null> {
