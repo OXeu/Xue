@@ -726,7 +726,7 @@ describe("isVagueDescription", () => {
   let isVagueDescription: (desc: string) => boolean;
 
   beforeAll(async () => {
-    const mod = await import("../src/agent");
+    const mod = await import("../src/chat-utils");
     isVagueDescription = mod.isVagueDescription;
   });
 

@@ -41,14 +41,12 @@ import {
   styleGuidance,
   buildSessionProfile,
   loadRecentMessages,
-  isVagueDescription,
   quickDecideSilence,
 } from "./chat-utils";
 
 // 保持导出兼容（让 import from "agent" 的用户不中断）
 export {
   analyzeAtmosphere,
-  isVagueDescription,
   styleGuidance,
   buildSessionProfile,
   quickDecideSilence,

@@ -15,8 +15,6 @@
  *   LLM_API_KEY           LLM API Key（必填）
  *   LLM_BASE_URL          API 地址，默认 https://api.deepseek.com/v1
  *   LLM_MODEL              模型名，默认 deepseek-v4-flash
- *   VISION_MODEL           视觉模型名（默认 gemma4:26b）
- *   VISION_BASE_URL        视觉 API 地址（默认 http://127.0.0.1:11444/v1）
  *   BOT_NAME               机器人名称，默认 Rin
  *   BOT_QQ                 Bot QQ 号，默认 3042160393
  *   REPLY_CHANCE           回复概率，默认 0.3
