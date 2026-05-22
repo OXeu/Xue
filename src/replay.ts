@@ -258,12 +258,12 @@ async function main(): Promise<void> {
 
         // 本地缓存未命中，回退到 CDN URL 下载
         if (!downloaded) {
-          const imgUrl = e.imageUrls?.[0] ?? null;
-          if (imgUrl) {
-            downloaded = await downloadImage(imgUrl);
-            if (downloaded) {
-              imgPhash = await computeDHash(downloaded.base64, downloaded.mime);
-            }
+            const imgUrl = e.imageUrls?.[0] ?? null;
+            if (imgUrl) {
+              downloaded = await downloadImage(imgUrl);
+              if (downloaded) {
+                imgPhash = await computeDHash(downloaded.base64, downloaded.mime);
+              }
             // CDN URL 过期 → 尝试本地缓存（listen.ts 可能已缓存）
             if (!downloaded) {
               const cached = getCachedImageByUrl(imgUrl);
