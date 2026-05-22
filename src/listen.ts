@@ -258,8 +258,9 @@ function connect(wsUrl: string, accessToken: string): void {
     writeEntry(entry);
   };
 
-  ws.onclose = () => {
-    console.log(`[${ts()}] disconnected`);
+  ws.onclose = (event: CloseEvent) => {
+    console.log(`[${ts()}] disconnected (code=${event.code})`);
+    console.error(`[${ts()}] disconnected (code=${event.code})`);
     // 指数退避重连（初始 1s，最大 30s）
     scheduleReconnect(wsUrl, accessToken);
   };
