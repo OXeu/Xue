@@ -21,11 +21,12 @@ import { join, resolve } from "node:path";
 
 const BOT_NAME = process.env.BOT_NAME || "Rin";
 const BOT_QQ = Number(process.env.BOT_QQ || "3042160393");
-const REPLY_CHANCE = 0.3;
+const REPLY_CHANCE = parseFloat(process.env.REPLY_CHANCE || "0.3");
 const SESSION = process.env.SESSION || "group_313214094";
 const MAX_MSGS = Number(process.env.MAX_MSGS) || 50;
 
 const RAW_DIR = resolve(import.meta.dirname, "../data/prod/raw");
+const CONFIG_PATH = resolve(import.meta.dirname, "../config/session-config.json");
 
 // ── 类型 ────────────────────────────────────────────────
 
@@ -48,6 +49,82 @@ interface ListenEntry {
 interface ReplyDecision {
   should: boolean;
   reason: string;
+}
+
+interface ReplyProbabilities {
+  mentioned: number;
+  media: number;
+  bystander: number;
+}
+
+const DEFAULT_PROBS: ReplyProbabilities = {
+  mentioned: 0.7,
+  media: 0.1,
+  bystander: 0.05,
+};
+
+// ── 配置加载 ────────────────────────────────────────────
+
+/** 加载会话配置。文件不存在或格式错误时返回空对象。 */
+function loadSessionConfig(): Record<string, { reply: boolean; probabilities?: ReplyProbabilities; replyChance?: number }> {
+  try {
+    if (!existsSync(CONFIG_PATH)) return {};
+    const raw = readFileSync(CONFIG_PATH, "utf8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const result: Record<string, any> = {};
+    for (const [key, val] of Object.entries(parsed)) {
+      if (key === "probabilities") continue;
+      if (val && typeof val === "object" && "reply" in (val as Record<string, unknown>)) {
+        const v = val as any;
+        if (typeof v.reply === "boolean") {
+          const session: any = { reply: v.reply };
+          if (v.probabilities && typeof v.probabilities === "object") {
+            const p: ReplyProbabilities = { ...DEFAULT_PROBS };
+            if (typeof v.probabilities.mentioned === "number") p.mentioned = v.probabilities.mentioned;
+            if (typeof v.probabilities.media === "number") p.media = v.probabilities.media;
+            if (typeof v.probabilities.bystander === "number") p.bystander = v.probabilities.bystander;
+            session.probabilities = p;
+          }
+          if (typeof v.replyChance === "number") {
+            session.replyChance = v.replyChance;
+          }
+          result[key] = session;
+        }
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+/** 加载全局概率。 */
+function loadProbabilities(): ReplyProbabilities {
+  try {
+    if (!existsSync(CONFIG_PATH)) return { ...DEFAULT_PROBS };
+    const raw = readFileSync(CONFIG_PATH, "utf8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const probs = parsed.probabilities as Partial<ReplyProbabilities> | undefined;
+    if (!probs) return { ...DEFAULT_PROBS };
+    return {
+      mentioned: typeof probs.mentioned === "number" ? probs.mentioned : DEFAULT_PROBS.mentioned,
+      media: typeof probs.media === "number" ? probs.media : DEFAULT_PROBS.media,
+      bystander: typeof probs.bystander === "number" ? probs.bystander : DEFAULT_PROBS.bystander,
+    };
+  } catch {
+    return { ...DEFAULT_PROBS };
+  }
+}
+
+const _sessionConfig = loadSessionConfig();
+const _globalProbs = loadProbabilities();
+
+function getProbsForSession(sessionId: string): ReplyProbabilities {
+  return _sessionConfig[sessionId]?.probabilities ?? _globalProbs;
+}
+
+function getReplyChanceForSession(sessionId: string): number {
+  return _sessionConfig[sessionId]?.replyChance ?? REPLY_CHANCE;
 }
 
 // ── 工具函数 ────────────────────────────────────────────
@@ -81,7 +158,7 @@ function buildContext(entries: ListenEntry[]): string {
     .join("\n");
 }
 
-function decideReply(entry: ListenEntry, rawText: string, msgType: string): ReplyDecision {
+function decideReply(entry: ListenEntry, rawText: string, msgType: string, probs?: ReplyProbabilities, replyChance?: number): ReplyDecision {
   if (entry.userId === BOT_QQ || entry.selfId === entry.userId) {
     return { should: false, reason: "self" };
   }
@@ -90,11 +167,14 @@ function decideReply(entry: ListenEntry, rawText: string, msgType: string): Repl
   const isAtOther = entry.atUsers.length > 0 && !isAtSelf && !isAtAll;
   const mentioned = stripCqCodes(rawText).toLowerCase().includes(BOT_NAME.toLowerCase());
 
+  const p = probs ?? DEFAULT_PROBS;
+
   if (isAtSelf || isAtAll) return { should: true, reason: isAtSelf ? "at-self" : "at-all" };
-  if (mentioned) return { should: Math.random() < 0.7, reason: "mentioned" };
-  if (msgType === "face" || msgType === "image") return { should: false, reason: "media (skip)" };
-  if (isAtOther) return { should: Math.random() < 0.05, reason: "bystander" };
-  return { should: Math.random() < REPLY_CHANCE, reason: "random" };
+  if (mentioned) return { should: Math.random() < p.mentioned, reason: "mentioned" };
+  if (msgType === "face" || msgType === "image") return { should: Math.random() < p.media, reason: "media" };
+  if (isAtOther) return { should: Math.random() < p.bystander, reason: "bystander" };
+  const chance = replyChance ?? REPLY_CHANCE;
+  return { should: Math.random() < chance, reason: "random" };
 }
 
 function roleInstruction(reason: string): string {
@@ -139,8 +219,10 @@ function main(): void {
     const atUsers = parseAtUsers(raw);
     const sender = e.card || e.nickname;
 
-    // 固定种子使每次重跑结果一致（用 msgId 做种子）
-    const decision = decideReply(e, raw, msgType);
+    // 用会话级配置覆写概率
+    const sessionProbs = getProbsForSession(SESSION);
+    const sessionReplyChance = getReplyChanceForSession(SESSION);
+    const decision = decideReply(e, raw, msgType, sessionProbs, sessionReplyChance);
 
     // 这条消息之前的 30 条作为上下文
     const ctxIdx = Math.max(0, allEntries.indexOf(e) - 30);
