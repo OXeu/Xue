@@ -347,7 +347,7 @@ function loadRecentMessages(sessionId: string, limit: number): ListenEntry[] {
   return lines.slice(-limit).map((l) => JSON.parse(l) as ListenEntry);
 }
 
-function buildContext(entries: ListenEntry[]): string {
+export function buildContext(entries: ListenEntry[]): string {
   if (entries.length === 0) return "（暂无历史消息）";
 
   return entries

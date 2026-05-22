@@ -20,10 +20,12 @@ beforeAll(() => {
 });
 
 let callVision: (query: string, base64: string, mime: string) => Promise<string | null>;
+let buildContext: (entries: any[]) => string;
 
 beforeAll(async () => {
   const mod = await import("../src/agent");
   callVision = mod.callVision;
+  buildContext = mod.buildContext;
 });
 
 // ── 辅助 ────────────────────────────────────────────────
@@ -358,5 +360,89 @@ describe("[VISION] query parsing in agent message loop", () => {
 
     expect(rounds).toBe(5); // hit max
     expect(finalReply).toBeNull(); // 没机会回复
+  });
+});
+
+// ── [图片] 标记 in buildContext ──────────────────────────
+
+describe("buildContext [图片] marker", () => {
+  const baseEntry = {
+    session: "test",
+    msgId: 1,
+    time: 1717000000,
+    type: "text",
+    text: "hello world",
+    userId: 100,
+    nickname: "UserA",
+    card: undefined,
+    subType: "normal",
+    selfId: 1,
+    atUsers: [],
+    replyTo: undefined,
+  };
+
+  test("segmentTypes 含 image 时追加 [图片] 标记", () => {
+    const ctx = buildContext([{
+      ...baseEntry,
+      segmentTypes: ["text", "image"],
+    }]);
+    expect(ctx).toContain("hello world [图片]");
+  });
+
+  test("纯图片消息（text 为空）显示 [image] [图片]", () => {
+    const ctx = buildContext([{
+      ...baseEntry,
+      text: "",
+      type: "image",
+      segmentTypes: ["image"],
+    }]);
+    expect(ctx).toContain("[image] [图片]");
+  });
+
+  test("segmentTypes 不含 image 时不加标记", () => {
+    const ctx = buildContext([{
+      ...baseEntry,
+      segmentTypes: ["text"],
+    }]);
+    expect(ctx).toContain("hello world");
+    expect(ctx).not.toContain("[图片]");
+  });
+
+  test("segmentTypes 为 undefined 时不加标记", () => {
+    const ctx = buildContext([{
+      ...baseEntry,
+      segmentTypes: undefined,
+    }]);
+    expect(ctx).toContain("hello world");
+    expect(ctx).not.toContain("[图片]");
+  });
+
+  test("空列表返回占位文本", () => {
+    const ctx = buildContext([]);
+    expect(ctx).toBe("（暂无历史消息）");
+  });
+
+  test("存在多个条目时各自正确标注", () => {
+    const ctx = buildContext([
+      { ...baseEntry, msgId: 1, segmentTypes: ["text"] },
+      { ...baseEntry, msgId: 2, segmentTypes: ["text", "image"] },
+      { ...baseEntry, msgId: 3, segmentTypes: ["image"] },
+    ]);
+    const lines = ctx.split("\n").filter(Boolean);
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).not.toContain("[图片]");
+    expect(lines[1]).toContain("[图片]");
+    expect(lines[2]).toContain("[图片]");
+  });
+
+  test("群名片 card 优先于 nickname", () => {
+    const ctx = buildContext([{
+      ...baseEntry,
+      nickname: "UserA",
+      card: "阿黄",
+      segmentTypes: ["text"],
+    }]);
+    expect(ctx).toContain("阿黄:");
+    expect(ctx).not.toContain("UserA");
   });
 });
