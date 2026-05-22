@@ -1,0 +1,258 @@
+/**
+ * listen.ts — OneBot 正向 WebSocket 群聊监听器。
+ *
+ * 只收不发。收到消息后按会话写入 JSONL 到 data/raw/，
+ * 用于后续分析群聊风格基线。
+ *
+ * 用法:  ONEBOT_WS_URL=ws://localhost:6700 bun run src/listen.ts
+ *
+ * 环境变量:
+ *   ONEBOT_WS_URL        OneBot 网关地址（默认 ws://localhost:6700）
+ *   ONEBOT_ACCESS_TOKEN  可选鉴权 token
+ */
+
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { join, resolve } from "node:path";
+
+// ── 类型 ────────────────────────────────────────────────
+
+interface OneBotSender {
+  user_id: number;
+  nickname: string;
+  card?: string;
+}
+
+interface OneBotMsgEvent {
+  post_type: "message";
+  message_type: "private" | "group";
+  sub_type: string;
+  message_id: number;
+  user_id: number;
+  group_id?: number;
+  raw_message: string;
+  message: string | unknown[];
+  sender: OneBotSender;
+  self_id: number;
+  time: number;
+}
+
+interface MessageSegment {
+  type: string;
+  data: Record<string, unknown>;
+}
+
+/** 解析后的消息记录，写入 JSONL 的一行。 */
+interface ListenEntry {
+  /** 会话标识: group_{id} 或 private_{id}。 */
+  session: string;
+  /** 消息 ID。 */
+  msgId: number;
+  /** 时间戳（秒）。 */
+  time: number;
+  /** 消息类型: text / at / image / reply / … */
+  type: string;
+  /** 纯文本内容（strip 掉 at/reply 标记后的正文）。 */
+  text: string;
+  /** 发送者 QQ。 */
+  userId: number;
+  /** 发送者昵称。 */
+  nickname: string;
+  /** 发送者群名片（如有）。 */
+  card?: string;
+  /** @ 了哪些 QQ（数组）。 */
+  atUsers: number[];
+  /** 回复引用的消息 ID（如有）。 */
+  replyTo?: number;
+  /** 原始消息段类型分布（脱敏摘要）。 */
+  segmentTypes: string[];
+}
+
+// ── 路径 ────────────────────────────────────────────────
+
+const DATA_DIR = resolve(import.meta.dirname, "../data/raw");
+
+function ensureDataDir(): void {
+  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+}
+
+function sessionLogPath(sessionId: string): string {
+  return join(DATA_DIR, `${sessionId}.jsonl`);
+}
+
+// ── 消息解析 ────────────────────────────────────────────
+
+/**
+ * 解析 OneBot message 字段。
+ * 兼容 array 格式和 string 格式。
+ */
+function parseMessage(message: string | unknown[]): {
+  text: string;
+  atUsers: number[];
+  replyTo?: number;
+  segmentTypes: string[];
+} {
+  const result = {
+    text: "",
+    atUsers: [] as number[],
+    replyTo: undefined as number | undefined,
+    segmentTypes: [] as string[],
+  };
+
+  // string 格式：直接作为纯文本
+  if (typeof message === "string") {
+    result.text = message;
+    result.segmentTypes = ["text"];
+    return result;
+  }
+
+  // array 格式
+  if (!Array.isArray(message)) return result;
+
+  for (const seg of message as MessageSegment[]) {
+    if (!seg || !seg.type) continue;
+    result.segmentTypes.push(seg.type);
+
+    switch (seg.type) {
+      case "text":
+        result.text += seg.data?.text ?? "";
+        break;
+      case "at":
+        if (seg.data?.qq && seg.data.qq !== "all") {
+          result.atUsers.push(Number(seg.data.qq));
+        }
+        break;
+      case "reply":
+        if (seg.data?.id) {
+          result.replyTo = Number(seg.data.id);
+        }
+        break;
+      // image / face / mface / … — 只记录类型，不提取内容
+    }
+  }
+
+  result.text = result.text.trim();
+  return result;
+}
+
+/** 估算消息的"类型"：纯文本、表情为主、图片为主、混合。 */
+function estimateMsgType(segmentTypes: string[], text: string): string {
+  if (segmentTypes.length === 0) return "unknown";
+  if (segmentTypes.every((t) => t === "text")) return "text";
+  if (segmentTypes.length === 1 && segmentTypes[0] === "face") return "face";
+  if (segmentTypes.length === 1 && segmentTypes[0] === "image") return "image";
+  if (segmentTypes.every((t) => t === "text" || t === "face")) return "text+face";
+  return "mixed";
+}
+
+// ── 写日志 ──────────────────────────────────────────────
+
+function writeEntry(entry: ListenEntry): void {
+  const line = JSON.stringify(entry) + "\n";
+  appendFileSync(sessionLogPath(entry.session), line, "utf8");
+}
+
+// ── 日志前缀 ────────────────────────────────────────────
+
+function ts(): string {
+  return new Date().toISOString();
+}
+
+// ── 连接 ────────────────────────────────────────────────
+
+function connect(wsUrl: string, accessToken: string): void {
+  // 将 token 注入 URL query 参数（OneBot 标准鉴权方式）
+  const finalUrl = accessToken
+    ? (() => {
+        const u = new URL(wsUrl);
+        u.searchParams.set("access_token", accessToken);
+        return u.toString();
+      })()
+    : wsUrl;
+
+  console.log(`[${ts()}] connecting to ${finalUrl} ...`);
+
+  const ws = new WebSocket(finalUrl);
+
+  ws.onopen = () => {
+    console.log(`[${ts()}] connected to ${finalUrl}`);
+  };
+
+  ws.onmessage = (event: MessageEvent) => {
+    const raw = typeof event.data === "string"
+      ? event.data
+      : Buffer.from(event.data).toString();
+
+    let data: OneBotMsgEvent;
+    try {
+      data = JSON.parse(raw) as OneBotMsgEvent;
+    } catch {
+      return; // 非 JSON 帧（如心跳 pong），忽略
+    }
+
+    if (data.post_type !== "message") return;
+
+    const sessionId = data.group_id
+      ? `group_${data.group_id}`
+      : `private_${data.user_id}`;
+
+    const parsed = parseMessage(data.message);
+    const entry: ListenEntry = {
+      session: sessionId,
+      msgId: data.message_id,
+      time: data.time,
+      type: estimateMsgType(parsed.segmentTypes, parsed.text),
+      text: parsed.text,
+      userId: data.user_id,
+      nickname: data.sender.nickname,
+      card: data.sender.card,
+      atUsers: parsed.atUsers,
+      replyTo: parsed.replyTo,
+      segmentTypes: parsed.segmentTypes,
+    };
+
+    // 控制台日志（精简）
+    const atInfo = entry.atUsers.length > 0 ? ` @[${entry.atUsers.join(",")}]` : "";
+    const replyInfo = entry.replyTo ? ` (回复 ${entry.replyTo})` : "";
+    console.log(
+      `[${ts()}] [${sessionId}] <${entry.nickname}>${atInfo}${replyInfo}: ${entry.text.slice(0, 120)}`,
+    );
+
+    writeEntry(entry);
+  };
+
+  ws.onclose = () => {
+    console.log(`[${ts()}] disconnected`);
+    // 断线后 3 秒重连
+    setTimeout(() => connect(wsUrl, accessToken), 3000);
+  };
+
+  ws.onerror = () => {
+    // onerror 后必然触发 onclose，不在 error 里重连避免双重触发
+  };
+}
+
+// ── 主流程 ──────────────────────────────────────────────
+
+function main(): void {
+  const wsUrl = process.env.ONEBOT_WS_URL || "ws://localhost:6700";
+  const accessToken = process.env.ONEBOT_ACCESS_TOKEN || "";
+
+  ensureDataDir();
+
+  console.log(`[${ts()}] listen starting`);
+  console.log(`[${ts()}] data dir: ${DATA_DIR}`);
+
+  connect(wsUrl, accessToken);
+
+  // 保持进程运行
+  process.on("SIGINT", () => {
+    console.log(`\n[${ts()}] shutting down ...`);
+    process.exit(0);
+  });
+  process.on("SIGTERM", () => {
+    console.log(`[${ts()}] shutting down ...`);
+    process.exit(0);
+  });
+}
+
+main();

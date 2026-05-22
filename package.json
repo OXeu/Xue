@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "collect-baseline": "bun src/collect-baseline.ts",
+    "listen": "bun src/listen.ts",
     "lint": "echo 'TODO'"
   },
   "devDependencies": {}
