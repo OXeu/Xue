@@ -59,58 +59,10 @@ import {
   getReplyRules,
   getVisionFormat,
 } from "./prompts";
+import { stripCqCodes, parseAtUsers, hasAtAll, estimateMsgType } from "./cq-codes";
+import { extractKeywords } from "./chat-utils";
 
-const STOPWORDS = new Set([
-  "的","了","是","我","你","他","她","它","在","有","不","就","也","都","还",
-  "这","那","什么","怎么","一个","这个","那个","我们","你们","他们","可以",
-  "没有","因为","所以","但是","如果","虽然","不是","就是","还是","只是","可是",
-  "而且","然后","之后","之前","现在","今天","明天","昨天","晚上","早上","中午",
-  "那个","这种","这样","那种","那个","已经","应该","可能","大概","比较","非常",
-  "真的","其实","还是","就是","觉得","知道","看到","听到","起来","出来","回来",
-  "进去","过来","上去","下来","一下","一点","一些","一个","这种","那些","这些",
-  "吗","啊","吧","呢","哦","嗯","哈","哎","哟","嘛","嗯嗯","哈哈","hhh","草","淦","靠",
-]);
-
-function stripCqCodes(raw: string): string {
-  return raw.replace(/\[CQ:[^\]]*\]/g, "").trim();
-}
-
-function parseAtUsers(raw: string): number[] {
-  const ids: number[] = [];
-  const re = /\[CQ:at,qq=(\d+)\]/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(raw)) !== null) ids.push(Number(m[1]));
-  return ids;
-}
-
-function hasAtAll(raw: string): boolean {
-  return /\[CQ:at,qq=all\]/.test(raw);
-}
-
-function estimateMsgType(raw: string): string {
-  const cqTypes = [...raw.matchAll(/\[CQ:(\w+),/g)].map((m) => m[1]);
-  if (cqTypes.length === 0) return "text";
-  if (stripCqCodes(raw).length > 0) return "mixed";
-  if (cqTypes.every((t) => t === "face")) return "face";
-  if (cqTypes.every((t) => t === "image")) return "image";
-  return "mixed";
-}
-
-function extractKeywords(entries: ListenEntry[], maxTerms: number): string[] {
-  const freq = new Map<string, number>();
-  const wordRe = /[\u4e00-\u9fff\w]{2,}/g;
-  for (const e of entries) {
-    const text = stripCqCodes(e.text);
-    const words = text.match(wordRe);
-    if (!words) continue;
-    for (const w of words) {
-      const lower = w.toLowerCase();
-      if (lower.length < 2 || STOPWORDS.has(lower)) continue;
-      freq.set(lower, (freq.get(lower) || 0) + 1);
-    }
-  }
-  return [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, maxTerms).map(([w]) => w);
-}
+/** 从最近消息中提取高频关键词做话题摘要 */
 
 function buildContext(entries: ListenEntry[], phashMap?: Map<number, string>): string {
   const ph = phashMap ?? new Map();
