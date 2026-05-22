@@ -639,7 +639,7 @@ function connect(): void {
       }
 
       const displayText = imgPhash
-        ? `${cleanText} [图片 #${imgPhash}]`
+        ? `${cleanText} [图片#${imgPhash}]`
         : /\[CQ:image/.test(rawMessage)
           ? `${cleanText} [图片]`
           : cleanText;
@@ -709,9 +709,9 @@ function connect(): void {
 
       // 初始消息列表
       const messageText = currentPhash !== null && _recentUserCache !== null && !/\[CQ:image/.test(rawMessage)
-        ? `${cleanText}（之前发的图 #${currentPhash}）`
+        ? `${cleanText}（之前发的图#${currentPhash}）`
         : currentPhash !== null
-          ? `${cleanText} [图片 #${currentPhash}]`
+          ? `${cleanText} [图片#${currentPhash}]`
           : /\[CQ:image/.test(rawMessage)
             ? `${cleanText} [图片]`
             : `${cleanText}`;
