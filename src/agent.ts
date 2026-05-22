@@ -523,7 +523,18 @@ function connect(): void {
     const isPrivate = data.message_type === "private";
     const sessionId = isPrivate ? `private_${data.user_id}` : `group_${data.group_id}`;
     const userId = data.user_id as number;
-    const rawMessage = typeof data.raw_message === "string" ? data.raw_message : "";
+    let rawMessage = typeof data.raw_message === "string" ? data.raw_message : "";
+
+    // 如果 raw_message 不含图片 CQ 码但 message 是数组格式且有图片段，
+    // 补一条合成 CQ 码，让下游的图片下载 / 视觉描述逻辑正常工作。
+    if (!/\[CQ:image/.test(rawMessage) && Array.isArray(data.message)) {
+      for (const seg of data.message as Array<{ type?: string; data?: Record<string, unknown> }>) {
+        if (seg?.type === "image" && typeof seg.data?.url === "string") {
+          rawMessage += `[CQ:image,url=${seg.data.url}]`;
+          break;
+        }
+      }
+    }
 
     // 解析 @ 列表和消息类型
     const atUsers = parseAtUsers(rawMessage);
