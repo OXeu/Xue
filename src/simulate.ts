@@ -145,6 +145,22 @@ function roleInstruction(reason: string): string {
   return `【${prompt}】`;
 }
 
+function styleGuidance(profile: string): string {
+  if (!profile.includes("风格：")) return "";
+  const guide: string[] = [];
+  if (profile.includes("短句偏多")) guide.push("回复请尽量控制在 20 字以内");
+  else if (profile.includes("短句适中")) guide.push("回复尽量简短");
+  else if (profile.includes("短句偏少")) guide.push("回复可适当展开，但避免长篇大论");
+  if (profile.includes("语气词偏多")) guide.push("少用语气词（哈/嘛/嗯/哦）");
+  else if (profile.includes("语气词适中")) guide.push("语气自然即可");
+  else if (profile.includes("语气词偏少")) guide.push("保持简洁语气");
+  if (profile.includes("问句偏多")) guide.push("可适度用问句");
+  else if (profile.includes("问句适中")) guide.push("可适当使用问句");
+  else if (profile.includes("问句偏少")) guide.push("减少问句");
+  if (guide.length === 0) return "";
+  return `【语气指导】${guide.join("，")}`;
+}
+
 function loadRecentMessages(sessionId: string, limit: number): ListenEntry[] {
   const path = join(RAW_DIR, `${sessionId}.jsonl`);
   if (!existsSync(path)) return [];
@@ -234,6 +250,7 @@ function main(): void {
       getSystemPrompt(BOT_NAME),
       getReplyRules(),
       profile,
+      styleGuidance(profile),
       topicSummary,
       `\n下面是这个群最近的消息：`,
       roleInst,
@@ -254,7 +271,7 @@ function main(): void {
       // 只输出回复的 system prompt 片段（太长，只输出关键行）
       const promptLines = systemContent.split("\n");
       const relevantLines = promptLines.filter(
-        (l) => l.startsWith("群聊特征") || l.startsWith("当前话题") || l.startsWith("【"),
+        (l) => l.startsWith("群聊特征") || l.startsWith("风格") || l.startsWith("当前话题") || l.startsWith("【"),
       );
       console.log(`  prompt:\n    ${relevantLines.join("\n    ")}`);
       console.log(`  等待 LLM 响应…（实际运行 replay.ts 可看到回复）`);

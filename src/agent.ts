@@ -266,6 +266,41 @@ async function describeImage(
 
 // ── 上下文 ──────────────────────────────────────────────
 
+/**
+ * 从 buildSessionProfile 的输出中解析风格行，生成语气指导。
+ *
+ * 映射规则（基于 style-report 中真人基线校准）：
+ * - 短句偏多 → 回复请尽量控制在 20 字以内
+ * - 短句适中 → 回复尽量简短
+ * - 短句偏少 → 回复可适当展开，但避免长篇大论
+ * - 语气词偏多 → 少用语气词（哈/嘛/嗯/哦）
+ * - 语气词适中 → 语气自然即可
+ * - 语气词偏少 → 保持简洁语气
+ * - 问句偏多 → 可适度用问句
+ * - 问句适中 → 可适当使用问句
+ * - 问句偏少 → 减少问句
+ */
+function styleGuidance(profile: string): string {
+  if (!profile.includes("风格：")) return "";
+
+  const guide: string[] = [];
+
+  if (profile.includes("短句偏多")) guide.push("回复请尽量控制在 20 字以内");
+  else if (profile.includes("短句适中")) guide.push("回复尽量简短");
+  else if (profile.includes("短句偏少")) guide.push("回复可适当展开，但避免长篇大论");
+
+  if (profile.includes("语气词偏多")) guide.push("少用语气词（哈/嘛/嗯/哦）");
+  else if (profile.includes("语气词适中")) guide.push("语气自然即可");
+  else if (profile.includes("语气词偏少")) guide.push("保持简洁语气");
+
+  if (profile.includes("问句偏多")) guide.push("可适度用问句");
+  else if (profile.includes("问句适中")) guide.push("可适当使用问句");
+  else if (profile.includes("问句偏少")) guide.push("减少问句");
+
+  if (guide.length === 0) return "";
+  return `【语气指导】${guide.join("，")}`;
+}
+
 /** 从历史消息中提取群聊特征词和风格特征。读取最近 200 条消息。 */
 export function buildSessionProfile(sessionId: string): string {
   if (sessionId.startsWith("private_")) return "";
@@ -550,6 +585,7 @@ function connect(): void {
             getSystemPrompt(BOT_NAME),
             getReplyRules(),
             buildSessionProfile(entry.session),
+            styleGuidance(buildSessionProfile(entry.session)),
             topicSummary,
             `\n下面是这个群最近的消息：`,
             roleInstruction,
