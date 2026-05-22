@@ -220,7 +220,13 @@ function formatContext(
 }
 
 /** 处理单个会话的 sticker 索引：读取、推理、持久化。导出以供测试直接调用。 */
-export async function processSession(session: string): Promise<void> {
+export async function processSession(
+  session: string,
+  options?: { reindex?: boolean; maxStickers?: number },
+): Promise<void> {
+  const reindex = options?.reindex ?? REINDEX;
+  const maxStickers = options?.maxStickers ?? MAX_STICKERS;
+
   const stickerPath = join(_stickersDir, `${session}.jsonl`);
   if (!existsSync(stickerPath)) return;
 
@@ -228,10 +234,10 @@ export async function processSession(session: string): Promise<void> {
   const stickers: StickerEntry[] = lines.map((l) => JSON.parse(l) as StickerEntry);
 
   // 加载已有推理结果（--reindex 时跳过）
-  const inferredIds = REINDEX ? new Set<number>() : loadInferredIds(session);
+  const inferredIds = reindex ? new Set<number>() : loadInferredIds(session);
 
   for (const sticker of stickers) {
-    if (total >= MAX_STICKERS) return;
+    if (total >= maxStickers) return;
     if (sticker.type !== "image") continue;
 
     // 跳过已推理的条目
@@ -314,7 +320,7 @@ async function main(): Promise<void> {
 
   for (const f of sessions) {
     const session = f.replace(/\.jsonl$/, "");
-    await processSession(session);
+    await processSession(session, { reindex: REINDEX, maxStickers: MAX_STICKERS });
     if (total >= MAX_STICKERS) break;
   }
 

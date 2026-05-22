@@ -470,4 +470,39 @@ describe("infer-stickers main flow integration", () => {
     const infPath = join(inferencesDir, "nonexistent_session.jsonl");
     expect(existsSync(infPath)).toBeFalse();
   });
+
+  test("--reindex 强制重新推理已存在的条目", async () => {
+    const session = "reindex_test";
+
+    // 准备 sticker 索引（1 条）
+    createStickerIndex(session, [
+      {
+        msgId: 94001, time: 1716400000, session,
+        userId: 204001, nickname: "ReindexUser", card: undefined,
+        type: "image", content: "https://multimedia.example.com/re.jpg", text: "",
+      },
+    ]);
+    createRawFile(session, [
+      { msgId: 94001, time: 1716400000, userId: 204001, nickname: "ReindexUser", text: "" },
+    ]);
+
+    // 首次运行（正常模式，没有 reindex）
+    await processSession(session);
+
+    const infPath = join(inferencesDir, `${session}.jsonl`);
+    let lines = readFileSync(infPath, "utf8").trim().split("\n").filter(Boolean);
+    expect(lines.length).toBe(1);
+    const firstInference = (JSON.parse(lines[0]) as InferenceEntry).inference;
+
+    // 带 reindex 再次运行 — 应重新推理而非跳过
+    await processSession(session, { reindex: true });
+
+    lines = readFileSync(infPath, "utf8").trim().split("\n").filter(Boolean);
+    expect(lines.length).toBe(2); // 新增了一条（而非跳过）
+
+    const entries = lines.map((l) => JSON.parse(l) as InferenceEntry);
+    // 两条都是同一个 msgId，但第二条是新推理结果
+    expect(entries[0].msgId).toBe(94001);
+    expect(entries[1].msgId).toBe(94001);
+  });
 });
