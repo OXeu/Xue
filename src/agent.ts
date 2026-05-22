@@ -618,6 +618,7 @@ function connect(): void {
     // 低确定性触发：先做快速沉默检查
     const lowCertainty = scenarioKey === "random" || scenarioKey === "bystander" || scenarioKey === "media";
     if (lowCertainty) {
+      let imgPhash: string | null = null;
       // 如果有图片，下载并缓存（供下游复用），但不预识别
       if (/\[CQ:image/.test(rawMessage)) {
         const imgUrl = parseFirstImageUrl(rawMessage);
@@ -630,15 +631,18 @@ function connect(): void {
           }
           if (downloaded) {
             const phash = await computeDHash(downloaded.base64, downloaded.mime);
+            imgPhash = phash;
             _imageCache.set(phash, downloaded);
             _recentUserImage.set(_recentUserKey, { downloaded, phash, time: Date.now() });
           }
         }
       }
 
-      const displayText = /\[CQ:image/.test(rawMessage)
-        ? `${cleanText} [图片]`
-        : cleanText;
+      const displayText = imgPhash
+        ? `${cleanText} [图片 #${imgPhash}]`
+        : /\[CQ:image/.test(rawMessage)
+          ? `${cleanText} [图片]`
+          : cleanText;
 
       const quickReply = await quickDecideSilence(
         contextText, senderName, displayText, scenarioKey, topicSummary, atmosphereTag, continuationHint,
@@ -705,10 +709,12 @@ function connect(): void {
 
       // 初始消息列表
       const messageText = currentPhash !== null && _recentUserCache !== null && !/\[CQ:image/.test(rawMessage)
-        ? `${cleanText}（之前发的图）`
-        : /\[CQ:image/.test(rawMessage)
-          ? `${cleanText} [图片]`
-          : `${cleanText}`;
+        ? `${cleanText}（之前发的图 #${currentPhash}）`
+        : currentPhash !== null
+          ? `${cleanText} [图片 #${currentPhash}]`
+          : /\[CQ:image/.test(rawMessage)
+            ? `${cleanText} [图片]`
+            : `${cleanText}`;
       const messages: any[] = [{
         role: "system",
         content: systemParts.filter(Boolean).join("\n"),
