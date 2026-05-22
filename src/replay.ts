@@ -797,4 +797,8 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch(console.error);
+// 仅在直接运行时调用 main()，被测试 import 时不自动执行
+const isDirectRun = import.meta.path === Bun.main;
+if (isDirectRun) {
+  main().catch(console.error);
+}
