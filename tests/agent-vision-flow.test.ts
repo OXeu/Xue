@@ -26,6 +26,7 @@ let buildContextWithPhashIds: (entries: any[], phashMap: Map<number, string>) =>
 let loadPhashMap: (session: string) => Map<number, string>;
 let computeDHash: (base64: string, mime: string) => Promise<string>;
 let persistBestDescription: (dir: string, session: string, msgId: number, phash: string, desc: string) => void;
+let analyzeAtmosphere: (entries: any[]) => string;
 
 beforeAll(async () => {
   const mod = await import("../src/agent");
@@ -34,6 +35,7 @@ beforeAll(async () => {
   buildContextWithPhashIds = mod.buildContextWithPhashIds;
   loadPhashMap = mod.loadPhashMap;
   persistBestDescription = mod.persistBestDescription;
+  analyzeAtmosphere = mod.analyzeAtmosphere;
   // computeDHash is imported inside agent, we can re-import it directly
   const phashMod = await import("../src/phash");
   computeDHash = phashMod.computeDHash;
@@ -1123,5 +1125,124 @@ describe("persistBestDescription", () => {
     expect(linesAfter).toHaveLength(1);
     const parsed = JSON.parse(linesAfter[0]);
     expect(parsed.inference).toBe("A normal description of a cat");
+  });
+});
+
+// ── analyzeAtmosphere ──────────────────────────────────
+
+describe("analyzeAtmosphere", () => {
+  const base = {
+    session: "test", msgId: 0, time: 100, type: "text", text: "",
+    userId: 1, nickname: "U", card: undefined, senderRole: undefined,
+    subType: "normal", selfId: 0, atUsers: [], replyTo: undefined, segmentTypes: ["text"],
+  };
+
+  function msg(text: string) {
+    return { ...base, text };
+  }
+
+  test("无分歧标记 → 气氛：正常", () => {
+    const entries = [
+      msg("今天天气真好"),
+      msg("确实，出去走走"),
+      msg("你们晚饭吃了啥"),
+      msg("我刚吃完"),
+      msg("我也吃完了"),
+    ];
+    expect(analyzeAtmosphere(entries)).toBe("气氛：正常");
+  });
+
+  test("15-30% 分歧标记 → 气氛：偏紧", () => {
+    const entries = [
+      msg("我觉得不是这样"),
+      msg("今天天气不错"),
+      msg("晚上吃什么"),
+      msg("我刚吃完"),
+      msg("我也觉得还行"),
+      msg("你们晚饭吃了啥"),
+      msg("好的没问题"),
+    ];
+    // "我觉得不是这样" 匹配我觉得不是 → 1/7 ≈ 14.3%，略低于 15% 阈值
+    // 修正：再加一条匹配的
+    const entries2 = [
+      msg("我觉得不是这样"),
+      msg("今天天气不错"),
+      msg("晚上吃什么"),
+      msg("我刚吃完"),
+      msg("明明就是这样"),
+      msg("你们晚饭吃了啥"),
+      msg("好的没问题"),
+    ];
+    // 2/7 ≈ 28.6%，15% < 28.6% < 30% → 偏紧
+    expect(analyzeAtmosphere(entries2)).toBe("气氛：偏紧");
+  });
+
+  test(">30% 分歧标记 → 气氛：有分歧", () => {
+    const entries = [
+      msg("你说的根本不对"),
+      msg("错了，完全不是这样"),
+      msg("我今天吃了三碗饭"),
+      msg("你搞错了吧"),
+      msg("明明就是这样的"),
+    ];
+    // 4/5 = 80% → > 30% → 有分歧
+    expect(analyzeAtmosphere(entries)).toBe("气氛：有分歧");
+  });
+
+  test("少于 5 条消息返回空字符串", () => {
+    const entries = [
+      msg("你好"),
+      msg("今天天气不错"),
+    ];
+    expect(analyzeAtmosphere(entries)).toBe("");
+  });
+
+  test("空数组返回空字符串", () => {
+    expect(analyzeAtmosphere([])).toBe("");
+  });
+
+  test("负面情绪关键词贡献比分", () => {
+    const entries = [
+      msg("这设计也太傻逼了"),
+      msg("每次用都卡得想吐"),
+      msg("真的无语了"),
+      msg("确实离谱"),
+      msg("服了，又崩了"),
+    ];
+    // 5条，负面词比例 100% → 0.2 阈值 → 有分歧（negativeRatio > 0.2 触发）
+    expect(analyzeAtmosphere(entries)).toBe("气氛：有分歧");
+  });
+
+  test("正常消息中有少量分歧标记仍为正常", () => {
+    const entries = [
+      msg("今天天气真好"),
+      msg("确实，出去走走"),
+      msg("你们晚饭吃了啥"),
+      msg("我今天吃了三碗饭"),
+      msg("哈哈那还不错"),
+      msg("我也吃完了"),
+      msg("最近在看一部新番"),
+      msg("哦那个我也有看"),
+      msg("主线进展挺快的"),
+      msg("等下我们去散步吗"),
+      msg("这句话有但是这个词"),
+      msg("好的没问题"),
+      msg("周末有什么计划吗"),
+      msg("好像要下雨了"),
+      msg("那就不去了"),
+    ];
+    // 1/15 = 6% < 15% → 正常
+    expect(analyzeAtmosphere(entries)).toBe("气氛：正常");
+  });
+
+  test("纯中性普通聊天（无任何触发词）→ 正常", () => {
+    const entries = [
+      msg("哈哈"),
+      msg("嗯嗯"),
+      msg("好的"),
+      msg("明白了"),
+      msg("不错不错"),
+    ];
+    expect(analyzeAtmosphere(entries)).toBe("气氛：正常");
   });
 });

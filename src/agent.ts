@@ -196,7 +196,7 @@ function extractKeywords(entries: ListenEntry[], maxTerms: number): string[] {
 }
 
 /** 分析最近消息的气氛（正常 / 偏紧 / 有分歧） */
-function analyzeAtmosphere(entries: ListenEntry[]): string {
+export function analyzeAtmosphere(entries: ListenEntry[]): string {
   if (entries.length < 5) return "";
 
   let disagreementCount = 0;
