@@ -60,9 +60,13 @@ import {
   getVisionFormat,
 } from "./prompts";
 import { stripCqCodes, parseAtUsers, hasAtAll, estimateMsgType } from "./cq-codes";
-import { extractKeywords } from "./chat-utils";
-
-/** 从最近消息中提取高频关键词做话题摘要 */
+import {
+  extractKeywords,
+  styleGuidance,
+  loadRecentMessages,
+  buildSessionProfile,
+  analyzeStyle,
+} from "./chat-utils";
 
 function buildContext(entries: ListenEntry[], phashMap?: Map<number, string>): string {
   const ph = phashMap ?? new Map();
@@ -109,70 +113,6 @@ function roleInstruction(reason: string): string {
   return `【${prompt}】`;
 }
 
-function styleGuidance(profile: string): string {
-  if (!profile.includes("风格：")) return "";
-  const guide: string[] = [];
-  if (profile.includes("短句偏多")) guide.push("回复请尽量控制在 20 字以内");
-  else if (profile.includes("短句适中")) guide.push("回复尽量简短");
-  else if (profile.includes("短句偏少")) guide.push("回复可适当展开，但避免长篇大论");
-  if (profile.includes("语气词偏多")) guide.push("少用语气词（哈/嘛/嗯/哦）");
-  else if (profile.includes("语气词适中")) guide.push("语气自然即可");
-  else if (profile.includes("语气词偏少")) guide.push("保持简洁语气");
-  if (profile.includes("问句偏多")) guide.push("可适度用问句");
-  else if (profile.includes("问句适中")) guide.push("可适当使用问句");
-  else if (profile.includes("问句偏少")) guide.push("减少问句");
-  if (guide.length === 0) return "";
-  return `【语气指导】${guide.join("，")}`;
-}
-
-function loadRecentMessages(sessionId: string, limit: number): ListenEntry[] {
-  const path = join(RAW_DIR, `${sessionId}.jsonl`);
-  if (!existsSync(path)) return [];
-  const lines = readFileSync(path, "utf8").trim().split("\n").filter(Boolean);
-  const entries: ListenEntry[] = [];
-  for (const l of lines) {
-    try {
-      entries.push(JSON.parse(l) as ListenEntry);
-    } catch { /* skip corrupt lines */ }
-  }
-  return entries.slice(-limit);
-}
-
-function buildSessionProfile(sessionId: string): string {
-  if (sessionId.startsWith("private_")) return "";
-  const entries = loadRecentMessages(sessionId, 200);
-  if (entries.length < 10) return "";
-  const keywords = extractKeywords(entries, 10);
-  const lines: string[] = [];
-  if (keywords.length > 0) lines.push(`群聊特征：${keywords.join("、")}`);
-  const style = analyzeStyle(entries);
-  if (style) lines.push(style);
-  return lines.join("\n");
-}
-
-function analyzeStyle(entries: ListenEntry[]): string {
-  if (entries.length < 10) return "";
-  let shortCount = 0, questionCount = 0, toneCount = 0, totalMessages = 0;
-  const toneRe = /[哈嘛嗯哦哟草靠淦]/g;
-  for (const e of entries) {
-    const text = stripCqCodes(e.text).trim();
-    if (!text) continue;
-    totalMessages++;
-    if (text.length <= 15) shortCount++;
-    if (text.includes("？") || text.endsWith("?") || /[吗呢么吧]/.test(text)) questionCount++;
-    const m = text.match(toneRe);
-    if (m) toneCount += m.length;
-  }
-  if (totalMessages === 0) return "";
-  const shortRatio = shortCount / totalMessages;
-  const questionRatio = questionCount / totalMessages;
-  const tonePerMsg = toneCount / totalMessages;
-  const shortLabel = shortRatio > 0.6 ? "短句偏多" : shortRatio > 0.3 ? "短句适中" : "短句偏少";
-  const questionLabel = questionRatio > 0.3 ? "问句偏多" : questionRatio > 0.15 ? "问句适中" : "问句偏少";
-  const toneLabel = tonePerMsg > 0.3 ? "语气词偏多" : tonePerMsg > 0.1 ? "语气词适中" : "语气词偏少";
-  return `风格：${shortLabel} | ${toneLabel} | ${questionLabel}`;
-}
-
 // ── 主流程 ──────────────────────────────────────────────
 
 function main(): void {
@@ -192,7 +132,7 @@ function main(): void {
   allEntries.sort((a, b) => a.time - b.time);
 
   const toProcess = allEntries.slice(-MAX_MSGS);
-  const profile = buildSessionProfile(SESSION);
+  const profile = buildSessionProfile(SESSION, RAW_DIR);
 
   console.log(`会话: ${SESSION}`);
   console.log(`总消息: ${allEntries.length}  |  模拟处理: ${toProcess.length}`);
