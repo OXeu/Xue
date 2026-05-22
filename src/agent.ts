@@ -324,7 +324,7 @@ export function buildContext(entries: ListenEntry[]): string {
     .map((e) => {
       const name = e.card || e.nickname;
       const time = new Date(e.time * 1000).toLocaleTimeString("zh-CN", {
-        hour: "2-digit", minute: "2-digit",
+        hour: "2-digit", minute: "2-digit", timeZone: "Asia/Shanghai",
       });
       const at = e.atUsers.length > 0 ? ` @${e.atUsers.join(",")}` : "";
       const reply = e.replyTo ? ` (回复 ${e.replyTo})` : "";
