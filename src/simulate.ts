@@ -141,7 +141,7 @@ import {
   buildSessionProfile,
 } from "./chat-utils";
 
-function buildContext(entries: ListenEntry[]): string {
+function buildContext(entries: ListenEntry[], replyMap?: Map<number, { sender: string; text: string }>): string {
   if (entries.length === 0) return "（暂无历史消息）";
   return entries
     .map((e) => {
@@ -150,7 +150,11 @@ function buildContext(entries: ListenEntry[]): string {
         hour: "2-digit", minute: "2-digit", timeZone: "Asia/Shanghai",
       });
       const at = e.atUsers.length > 0 ? ` @${e.atUsers.join(",")}` : "";
-      const reply = e.replyTo ? ` (回复 ${e.replyTo})` : "";
+      const reply = e.replyTo
+        ? (replyMap?.has(e.replyTo)
+            ? ` (回复 ${replyMap.get(e.replyTo)!.sender} "${replyMap.get(e.replyTo)!.text}")`
+            : ` (回复 ${e.replyTo})`)
+        : "";
       const text = e.text || `[${e.type}]`;
       const imgMark = e.segmentTypes?.includes("image") ? " [图片]" : "";
       return `[${time}] ${name}${at}${reply}: ${text}${imgMark}`;
@@ -227,7 +231,17 @@ function main(): void {
     // 这条消息之前的 30 条作为上下文
     const ctxIdx = Math.max(0, allEntries.indexOf(e) - 30);
     const contextEntries = allEntries.slice(ctxIdx, allEntries.indexOf(e));
-    const contextText = buildContext(contextEntries);
+    // 构建 replyTo 查找表：msgId → { sender, text }
+    const replyMap = new Map<number, { sender: string; text: string }>();
+    for (const ce of contextEntries) {
+      if (ce.msgId) {
+        replyMap.set(ce.msgId, {
+          sender: ce.card || ce.nickname,
+          text: (ce.text || "").slice(0, 80),
+        });
+      }
+    }
+    const contextText = buildContext(contextEntries, replyMap);
     const keywords = extractKeywords(contextEntries, 5);
     const topicSummary = keywords.length > 0 ? `当前话题：${keywords.join("、")}` : "";
 
