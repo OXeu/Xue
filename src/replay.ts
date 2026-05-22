@@ -27,14 +27,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { computeDHash } from "./phash";
-import { cleanVisionDescription } from "./clean-vision";
-import { downloadImage, gifToJpeg } from "./image-download";
+import { downloadImage } from "./image-download";
 import { getCachedImage } from "./image-cache";
 import { parseAtUsers, stripCqCodes, estimateMsgType } from "./cq-codes";
 import {
   extractKeywords,
   analyzeAtmosphere,
-  isVagueDescription,
   quickDecideSilence,
 } from "./chat-utils";
 import {
@@ -48,8 +46,6 @@ import {
 const LLM_API_KEY = process.env.LLM_API_KEY || "";
 const LLM_BASE_URL = (process.env.LLM_BASE_URL || "https://api.deepseek.com/v1").replace(/\/+$/, "");
 const LLM_MODEL = process.env.LLM_MODEL || "deepseek-v4-flash";
-const VISION_MODEL = process.env.VISION_MODEL || "gemma4:26b";
-const VISION_BASE_URL = (process.env.VISION_BASE_URL || "http://127.0.0.1:11444/v1").replace(/\/+$/, "");
 const BOT_NAME = process.env.BOT_NAME || "Rin";
 const BOT_QQ = Number(process.env.BOT_QQ || "3042160393");
 const REPLY_CHANCE = parseFloat(process.env.REPLY_CHANCE || "0.3");
@@ -60,35 +56,6 @@ const RAW_DIR = resolve(import.meta.dirname, "../data/prod/raw");
 
 /** 临时图片缓存：pHash → base64 + mime */
 const _imageCache = new Map<string, { base64: string; mime: string }>();
-
-const DESCRIBE_IMAGE_TOOL = {
-  type: "function" as const,
-  function: {
-    name: "describe_image",
-    description: "询问某张图片的内容。图片 ID（pHash）在消息头中以 #phash_xxx 形式标注。",
-    parameters: {
-      type: "object",
-      properties: {
-        id: { type: "string", description: "图片的 pHash ID（来自消息头中的 #phash_xxx）" },
-        question: { type: "string", description: "你想问这张图片的具体问题" },
-      },
-      required: ["id", "question"],
-    },
-  },
-};
-
-interface ToolCall {
-  id: string;
-  type: "function";
-  function: { name: string; arguments: string };
-}
-
-interface LlmResponse {
-  content: string | null;
-  tool_calls: ToolCall[] | null;
-  /** 原始 message 对象（含 reasoning_content 等额外字段） */
-  rawMessage?: Record<string, unknown>;
-}
 
 // ── 类型 ────────────────────────────────────────────────
 
@@ -165,49 +132,6 @@ function roleInstruction(reason: string): string {
   return prompt ? `【${prompt}】` : `【${getScenarioPrompt("default", BOT_NAME)}】`;
 }
 
-// ── 图片描述 ────────────────────────────────────────────
-
-/** 用视觉模型描述图片（从 base64），返回纯描述文本 */
-async function describeImageFromBase64(question: string, base64: string, mime: string): Promise<string | null> {
-  if (!VISION_MODEL) return null;
-  // GIF → JPEG 转换（Gemma4 等模型不支持 GIF）
-  const converted = await gifToJpeg(base64, mime);
-  const dataUri = `data:${converted.mime};base64,${converted.base64}`;
-  try {
-    // Ollama 的 auth 是 "Bearer ollama"，OpenAI 兼容则用真正的 API key
-    const visionKey = VISION_BASE_URL.includes("127.0.0.1") || VISION_BASE_URL.includes("localhost") ? "ollama" : (process.env.LLM_API_KEY || "");
-    const res = await fetch(`${VISION_BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${visionKey}`,
-      },
-      body: JSON.stringify({
-        model: VISION_MODEL,
-        messages: [{
-          role: "user",
-          content: [
-            { type: "text", text: question },
-            { type: "image_url", image_url: { url: dataUri } },
-          ],
-        }],
-        max_tokens: 200,
-        temperature: 0.3,
-      }),
-    });
-    if (!res.ok) return null;
-    const json = (await res.json()) as {
-      choices: { message: { content?: string; reasoning?: string } }[];
-    };
-    const msg = json.choices?.[0]?.message;
-    const raw = (msg?.reasoning || msg?.content || "").trim();
-    const clean = raw ? cleanVisionDescription(raw) : null;
-    return clean;
-  } catch {
-    return null;
-  }
-}
-
 // ── LLM ────────────────────────────────────────────────
 
 async function callLlm(messages: { role: string; content: string }[]): Promise<string> {
@@ -225,40 +149,6 @@ async function callLlm(messages: { role: string; content: string }[]): Promise<s
   }
   const data = (await res.json()) as { choices: { message: { content: string | null } }[] };
   return data.choices?.[0]?.message?.content?.trim() || "";
-}
-
-/** 支持工具调用的 LLM 请求 */
-async function callLlmWithTools(
-  messages: any[],
-  tools?: typeof DESCRIBE_IMAGE_TOOL[],
-): Promise<LlmResponse> {
-  const url = `${LLM_BASE_URL.replace(/\/+$/, "")}/chat/completions`;
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${LLM_API_KEY}`,
-  };
-  const body: Record<string, unknown> = {
-    model: LLM_MODEL,
-    messages,
-    max_tokens: 300,
-    temperature: 0.8,
-  };
-  if (tools && tools.length > 0) body.tools = tools;
-
-  const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`LLM ${res.status}: ${body.slice(0, 200)}`);
-  }
-  const data = (await res.json()) as {
-    choices: { message: Record<string, unknown> }[];
-  };
-  const msg = data.choices?.[0]?.message ?? {};
-  return {
-    content: (typeof msg.content === "string" ? msg.content.trim() : null) ?? null,
-    tool_calls: (msg.tool_calls as ToolCall[] | null) ?? null,
-    rawMessage: msg,
-  };
 }
 
 // ── 主流程 ──────────────────────────────────────────────
@@ -354,8 +244,7 @@ async function main(): Promise<void> {
       const summary = kws.length > 0 ? `当前话题：${kws.join("、")}` : "";
       const atmosphereTag = analyzeAtmosphere(ctxEntries);
 
-      // 如果是图片消息，先尝试从本地缓存加载（phash），再回退到 CDN 下载
-      let imageDesc = "";
+      // 如果是图片消息，下载并缓存（供后续 tool calling 使用），但不预识别
       if (isImageMsg(e)) {
         let downloaded: { base64: string; mime: string } | null = null;
         let phash: string | null = null;
@@ -382,17 +271,11 @@ async function main(): Promise<void> {
 
         if (downloaded && phash) {
           _imageCache.set(phash, downloaded);
-          if (VISION_MODEL) {
-            const answer = await describeImageFromBase64("用一条简短的自然语句描述这张图片的核心内容：主体是什么、情绪或氛围如何、是否包含文字。不要模板化的描述。", downloaded.base64, downloaded.mime);
-            if (answer && !isVagueDescription(answer)) {
-              imageDesc = answer;
-            }
-          }
         }
       }
 
-      const displayText = imageDesc
-        ? `${cleanText}（图片描述：${imageDesc.slice(0, 80)}）`
+      const displayText = isImageMsg(e)
+        ? `${cleanText} [图片]`
         : cleanText;
 
       const quickReply = await quickDecideSilence(ctxText, senderName, displayText, decision.reason, summary, atmosphereTag);
