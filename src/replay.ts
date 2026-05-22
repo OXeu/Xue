@@ -81,6 +81,8 @@ interface ToolCall {
 interface LlmResponse {
   content: string | null;
   tool_calls: ToolCall[] | null;
+  /** 原始 message 对象（含 reasoning_content 等额外字段） */
+  rawMessage?: Record<string, unknown>;
 }
 
 // ── 类型 ────────────────────────────────────────────────
@@ -347,7 +349,7 @@ function decideReply(
 
   if (isAtSelf || isAtAll) return { should: true, reason: isAtSelf ? "at-self" : "at-all" };
   if (mentioned) return { should: Math.random() < 0.7, reason: "mentioned" };
-  if (msgType === "face" || msgType === "image") return { should: Math.random() < 0.1, reason: "media" };
+  if (msgType === "face" || msgType === "image") return { should: Math.random() < 0.30, reason: "media" };
   if (isAtOther) return { should: Math.random() < 0.05, reason: "bystander" };
   return { should: Math.random() < REPLY_CHANCE, reason: "random" };
 }
@@ -377,11 +379,13 @@ async function describeImageFromBase64(question: string, base64: string, mime: s
   if (!VISION_MODEL) return null;
   const dataUri = `data:${mime};base64,${base64}`;
   try {
+    // Ollama 的 auth 是 "Bearer ollama"，OpenAI 兼容则用真正的 API key
+    const visionKey = VISION_BASE_URL.includes("127.0.0.1") || VISION_BASE_URL.includes("localhost") ? "ollama" : (process.env.LLM_API_KEY || "");
     const res = await fetch(`${VISION_BASE_URL}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.LLM_API_KEY || "ollama"}`,
+        Authorization: `Bearer ${visionKey}`,
       },
       body: JSON.stringify({
         model: VISION_MODEL,
@@ -452,12 +456,13 @@ async function callLlmWithTools(
     throw new Error(`LLM ${res.status}: ${body.slice(0, 200)}`);
   }
   const data = (await res.json()) as {
-    choices: { message: { content?: string | null; tool_calls?: ToolCall[] | null } }[];
+    choices: { message: Record<string, unknown> }[];
   };
-  const msg = data.choices?.[0]?.message;
+  const msg = data.choices?.[0]?.message ?? {};
   return {
-    content: msg?.content?.trim() ?? null,
-    tool_calls: msg?.tool_calls ?? null,
+    content: (typeof msg.content === "string" ? msg.content.trim() : null) ?? null,
+    tool_calls: (msg.tool_calls as ToolCall[] | null) ?? null,
+    rawMessage: msg,
   };
 }
 
@@ -600,14 +605,19 @@ async function main(): Promise<void> {
           const llmResult = await callLlmWithTools(messages, tools);
 
           if (llmResult.tool_calls && llmResult.tool_calls.length > 0 && VISION_MODEL) {
+            // 使用原始 message（包含 reasoning_content 等 DeepSeek 需要的字段）
+            if (llmResult.rawMessage) {
+              messages.push({ ...llmResult.rawMessage, role: "assistant" });
+            }
             for (const tc of llmResult.tool_calls) {
               if (tc.function.name === "describe_image") {
                 let args: { id: string; question: string };
                 try {
                   args = JSON.parse(tc.function.arguments);
                 } catch {
-                  const asst: any = { role: "assistant", content: null, tool_calls: [tc] };
-                  messages.push(asst);
+                  if (!llmResult.rawMessage) {
+                    messages.push({ role: "assistant", content: null, tool_calls: [tc] });
+                  }
                   messages.push({ role: "tool", tool_call_id: tc.id, content: "参数解析失败" });
                   continue;
                 }
@@ -621,8 +631,6 @@ async function main(): Promise<void> {
                   toolResult = "（该图片数据已过期，无法查看）";
                 }
                 toolCallCount++;
-                const asst: any = { role: "assistant", content: null, tool_calls: [tc] };
-                messages.push(asst);
                 messages.push({ role: "tool", tool_call_id: tc.id, content: toolResult });
               }
             }
