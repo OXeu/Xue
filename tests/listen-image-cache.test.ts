@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 
 import { cacheEntryImage } from "../src/listen";
+import { computeDHash } from "../src/phash";
 import { setCacheDir, hasCache, getCachedImage } from "../src/image-cache";
 
 let tmpDir = "";
@@ -137,6 +138,86 @@ test("cacheEntryImage: HTTP 非 200 时静默跳过", async () => {
 
     const files = readdirSync(tmpDir);
     expect(files.length).toBe(0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("cacheEntryImage: 成功下载时返回 phash 字符串", async () => {
+  const mockImage = pngBuffer();
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = mock(() =>
+    Promise.resolve(new Response(mockImage, {
+      headers: { "content-type": "image/png" },
+    })),
+  );
+
+  try {
+    const phash = await cacheEntryImage("https://example.com/ret.png", "test_session", 3001);
+
+    expect(phash).not.toBeNull();
+    expect(phash).toMatch(/^[0-9a-f]{16}$/);
+
+    // 验证返回的 phash 与缓存文件名一致
+    const files = readdirSync(tmpDir);
+    const pngFiles = files.filter((f) => f.endsWith(".png"));
+    expect(pngFiles.length).toBe(1);
+    const filePhash = pngFiles[0].replace(".png", "");
+    expect(phash).toBe(filePhash);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("cacheEntryImage: 返回的 phash 与直接 computeDHash 一致", async () => {
+  const mockImage = pngBuffer();
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = mock(() =>
+    Promise.resolve(new Response(mockImage, {
+      headers: { "content-type": "image/png" },
+    })),
+  );
+
+  try {
+    const phash = await cacheEntryImage("https://example.com/direct.png", "test_session", 3002);
+    expect(phash).not.toBeNull();
+
+    // 直接用 computeDHash 算一遍，结果应一致
+    const base64 = mockImage.toString("base64");
+    const expected = await computeDHash(base64, "image/png");
+    expect(phash).toBe(expected);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("cacheEntryImage: fetch 失败时返回 null", async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = mock(() =>
+    Promise.reject(new Error("network error")),
+  );
+
+  try {
+    const phash = await cacheEntryImage("https://example.com/null.png", "test_session", 3003);
+    expect(phash).toBeNull();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("cacheEntryImage: HTTP 非 200 时返回 null", async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = mock(() =>
+    Promise.resolve(new Response("Not Found", { status: 404 })),
+  );
+
+  try {
+    const phash = await cacheEntryImage("https://example.com/404b.png", "test_session", 3004);
+    expect(phash).toBeNull();
   } finally {
     globalThis.fetch = originalFetch;
   }
