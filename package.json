@@ -9,6 +9,7 @@
     "listen": "bun src/listen.ts",
     "replay": "bun src/replay.ts",
     "simulate": "bun src/simulate.ts",
+    "index-stickers": "bun src/index-stickers.ts",
     "start": "bash scripts/start-listen.sh",
     "stop": "bash scripts/stop-listen.sh",
     "status": "bash scripts/status-listen.sh",
