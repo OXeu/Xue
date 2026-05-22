@@ -54,9 +54,6 @@ const INFERENCES_DIR = resolve(import.meta.dirname, "../data/inferences");
 /** 临时图片缓存：pHash → base64 + mime */
 const _imageCache = new Map<string, { base64: string; mime: string }>();
 
-/** pHash → msgId 映射，用于持久化视觉描述时回查 msgId */
-const _phashToMsgId = new Map<string, number>();
-
 const _inferencesDir = resolve(import.meta.dirname, "../data/inferences");
 
 const DESCRIBE_IMAGE_TOOL = {
@@ -653,7 +650,6 @@ async function main(): Promise<void> {
             hasImage = true;
             currentPhash = await computeDHash(downloaded.base64, downloaded.mime);
             _imageCache.set(currentPhash, downloaded);
-            _phashToMsgId.set(currentPhash, e.msgId);
             // 保存 phash 到 inference 文件
             try {
               if (!existsSync(_inferencesDir)) mkdirSync(_inferencesDir, { recursive: true });
@@ -745,10 +741,7 @@ async function main(): Promise<void> {
                   toolResult = answer || "(分析失败)";
                   // 持久化视觉描述到 inferences 文件（只保存有信息量的描述，后轮覆盖前轮）
                   if (answer && !isVagueDescription(answer)) {
-                    const inferredMsgId = _phashToMsgId.get(id);
-                    if (inferredMsgId) {
-                      persistBestDescription(_inferencesDir, SESSION, inferredMsgId, id, answer);
-                    }
+                    persistBestDescription(_inferencesDir, SESSION, e.msgId, id, answer);
                   }
                 } else {
                   toolResult = "（该图片数据已过期，无法查看）";
