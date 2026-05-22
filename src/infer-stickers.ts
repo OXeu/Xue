@@ -4,18 +4,18 @@
  * 读取 data/stickers/ 中的索引条目（type: image），对每条：
  * 1. 从 data/raw/ 反查前后各 3 条上下文
  * 2. 调用视觉模型（gemma4:26b via Ollama）分析图片含义
- * 3. 输出到终端
+ * 3. 输出到终端，同时保存到 data/inferences/{session}.jsonl
+ *
+ * 已推理的条目（msgId）自动跳过，除非传入 --reindex 强制重新推理。
  *
  * 运行模式：
- *   bun run src/infer-stickers.ts                     # 全量推理
- *   SESSION=group_313214094 bun run src/infer-stickers.ts  # 指定会话
- *   MAX_STICKERS=5 bun run src/infer-stickers.ts           # 限制处理条数
- *
- * 环境变量（复用 .env 配置）：
- *   VISION_MODEL、VISION_BASE_URL、LLM_API_KEY
+ *   bun run infer-stickers                              # 全量（跳过已推理）
+ *   bun run infer-stickers --reindex                   # 全量 + 重新推理
+ *   SESSION=group_313214094 bun run infer-stickers      # 指定会话
+ *   MAX_STICKERS=5 bun run infer-stickers              # 限制处理条数
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { getStickerContext, StickerEntry } from "./index-stickers";
 import { cleanVisionDescription } from "./clean-vision";
@@ -23,6 +23,7 @@ import { hasCache, getCachedImage, saveCachedImage } from "./image-cache";
 
 const STICKERS_DIR = resolve(import.meta.dirname, "../data/stickers");
 const RAW_DIR = resolve(import.meta.dirname, "../data/raw");
+const INFERENCES_DIR = resolve(import.meta.dirname, "../data/inferences");
 
 // ── 配置 ────────────────────────────────────────────────
 
@@ -30,12 +31,65 @@ const VISION_MODEL = process.env.VISION_MODEL || "gemma4:26b";
 const VISION_BASE_URL = (process.env.VISION_BASE_URL || "http://127.0.0.1:11444/v1").replace(/\/+$/, "");
 const LLM_API_KEY = process.env.LLM_API_KEY || "";
 const MAX_STICKERS = Number(process.env.MAX_STICKERS || Infinity);
+const REINDEX = process.argv.includes("--reindex");
+
+// ── 类型 ────────────────────────────────────────────────
+
+export interface InferenceEntry {
+  msgId: number;
+  time: number;
+  session: string;
+  userId: number;
+  nickname: string;
+  card?: string;
+  type: "image" | "face";
+  /** 图片 URL 或 face ID */
+  content: string;
+  /** 该消息的纯文本内容 */
+  text: string;
+  /** 反查的上下文（前后各 3 条） */
+  context: { time: number; nickname: string; text: string }[];
+  /** 模型返回的含义分析，失败时为 null */
+  inference: string | null;
+  /** 推理时间戳（ISO） */
+  timestamp: string;
+}
+
+// ── 持久化 ──────────────────────────────────────────────
+
+function ensureInferencesDir(): void {
+  if (!existsSync(INFERENCES_DIR)) mkdirSync(INFERENCES_DIR, { recursive: true });
+}
+
+/** 加载某会话已有的推理结果 msgId 集合 */
+function loadInferredIds(session: string): Set<number> {
+  const path = join(INFERENCES_DIR, `${session}.jsonl`);
+  if (!existsSync(path)) return new Set();
+  const ids = new Set<number>();
+  const lines = readFileSync(path, "utf8").trim().split("\n").filter(Boolean);
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line) as InferenceEntry;
+      ids.add(entry.msgId);
+    } catch { /* skip */ }
+  }
+  return ids;
+}
+
+/** 追加一条推理结果到磁盘 */
+function saveInference(entry: InferenceEntry): void {
+  const path = join(INFERENCES_DIR, `${entry.session}.jsonl`);
+  appendFileSync(path, JSON.stringify(entry) + "\n", "utf8");
+}
 
 // ── 统计 ────────────────────────────────────────────────
 
 let total = 0;
 let success = 0;
 let fail = 0;
+let skipped = 0;
+
+// ── 图片获取 ────────────────────────────────────────────
 
 /** 获取图片 base64：优先使用本地缓存，无缓存时从 URL 下载（并缓存结果） */
 async function getImageBase64(
@@ -57,7 +111,6 @@ async function getImageBase64(
       const buf = await res.arrayBuffer();
       const mime = res.headers.get("content-type") || "image/jpeg";
       const base64 = Buffer.from(buf).toString("base64");
-      // 下载成功后写入缓存，后续直接命中
       saveCachedImage(session, msgId, base64, mime, "(pending)", imageUrl);
       console.log(`    [downloaded + cached] ${session}_${msgId}`);
       return { base64, mime };
@@ -82,7 +135,7 @@ async function getImageBase64(
 async function inferStickerMeaning(imageUrl: string, contextText: string, session: string, msgId: number): Promise<string | null> {
   const img = await getImageBase64(imageUrl, session, msgId);
   if (!img) {
-    console.error("    [error] 所有图片来源均失败（无缓存、CDN 不可用、picsum fallback 也失败）");
+    console.error("    [error] 所有图片来源均失败");
     return null;
   }
   const dataUri = `data:${img.mime};base64,${img.base64}`;
@@ -148,14 +201,22 @@ async function processSession(session: string): Promise<void> {
   const lines = readFileSync(stickerPath, "utf8").trim().split("\n").filter(Boolean);
   const stickers: StickerEntry[] = lines.map((l) => JSON.parse(l) as StickerEntry);
 
+  // 加载已有推理结果（--reindex 时跳过）
+  const inferredIds = REINDEX ? new Set<number>() : loadInferredIds(session);
+
   for (const sticker of stickers) {
     if (total >= MAX_STICKERS) return;
     if (sticker.type !== "image") continue;
 
+    // 跳过已推理的条目
+    if (inferredIds.has(sticker.msgId)) {
+      skipped++;
+      continue;
+    }
+
     total++;
 
     const ctx = getStickerContext(sticker.msgId, sticker.session, 3, { rawDir: RAW_DIR });
-    const contextText = formatContext(ctx);
     const sender = sticker.card || sticker.nickname;
 
     console.log(`\n--- [${total}] ${sticker.session} ---`);
@@ -166,21 +227,38 @@ async function processSession(session: string): Promise<void> {
     console.log(`  发送者: ${sender}`);
     console.log(`  图片: ${sticker.content}`);
     console.log(`  上下文:`);
-    for (const line of contextText.split("\n")) {
-      console.log(`    ${line}`);
+    for (const c of ctx) {
+      console.log(`    ${c.nickname}: ${c.text}`);
     }
 
     console.log(`  分析中...`);
-    const raw = await inferStickerMeaning(sticker.content, contextText, sticker.session, sticker.msgId);
-    const meaning = raw ? cleanVisionDescription(raw) : null;
+    const raw = await inferStickerMeaning(sticker.content, formatContext(ctx), sticker.session, sticker.msgId);
+    const inference = raw ? cleanVisionDescription(raw) : null;
 
-    if (meaning) {
-      console.log(`  含义: ${meaning}`);
+    if (inference) {
+      console.log(`  含义: ${inference}`);
       success++;
     } else {
       console.log(`  含义: (分析失败)`);
       fail++;
     }
+
+    // 持久化推理结果
+    const entry: InferenceEntry = {
+      msgId: sticker.msgId,
+      time: sticker.time,
+      session: sticker.session,
+      userId: sticker.userId,
+      nickname: sticker.nickname,
+      card: sticker.card,
+      type: sticker.type,
+      content: sticker.content,
+      text: sticker.text,
+      context: ctx,
+      inference,
+      timestamp: new Date().toISOString(),
+    };
+    saveInference(entry);
   }
 }
 
@@ -189,6 +267,8 @@ async function main(): Promise<void> {
     console.log("data/stickers/ does not exist. Run 'bun run index-stickers' first.");
     process.exit(1);
   }
+
+  ensureInferencesDir();
 
   const target = process.env.SESSION;
   const allFiles = readdirSync(STICKERS_DIR).filter((f) => f.endsWith(".jsonl"));
@@ -202,7 +282,8 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  console.log(`Inferring sticker meanings...`);
+  const mode = REINDEX ? "（强制重新推理）" : "（跳过已推理）";
+  console.log(`Inferring sticker meanings... ${mode}`);
   console.log(`Model: ${VISION_MODEL} @ ${VISION_BASE_URL}`);
 
   for (const f of sessions) {
@@ -214,8 +295,10 @@ async function main(): Promise<void> {
   console.log(`\n${"=".repeat(40)}`);
   console.log(`处理完成`);
   console.log(`  总计: ${total}`);
+  console.log(`  已跳过: ${skipped}`);
   console.log(`  成功: ${success}`);
   console.log(`  失败: ${fail}`);
+  console.log(`  输出: ${INFERENCES_DIR}/`);
 }
 
 main().catch(console.error);
