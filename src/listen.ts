@@ -308,7 +308,7 @@ function connect(wsUrl: string, accessToken: string): void {
 
     writeEntry(entry);
 
-    // 非阻塞缓存图片（成功后 infer-stickers 可直接用本地文件）
+    // 非阻塞缓存图片
     if (entry.imageUrls && entry.imageUrls.length > 0) {
       for (const url of entry.imageUrls) {
         cacheEntryImage(url, entry.session, entry.msgId);

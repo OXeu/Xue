@@ -11,13 +11,11 @@ rin-research-humanize/
 ├── src/
 │   ├── agent.ts            # 主 agent：WS 监听 → 上下文 → 视觉问答 → LLM → 回复
 │   ├── listen.ts           # 消息监听器：记录 JSONL + 异步缓存图片到 images/
-│   ├── index-stickers.ts   # 表情包索引器：扫描 data/raw/，记录 msgId/session/type/content
-│   ├── infer-stickers.ts   # 批量推理：扫描索引 → pHash 去重 → 视觉模型推理 → 写入 data/inferences/，含 --reindex
 │   ├── phash.ts            # 感知哈希（dHash），用于不同分辨率下的相似图片去重（阈值 3）
 │   ├── simulate.ts         # 模拟重放：不调 LLM，只输出决策和 prompt，零成本评估
 │   ├── replay.ts           # 重放历史消息：调 LLM 生成实际回复，用于验证
 │   ├── clean-vision.ts     # 清洗视觉模型的 reasoning 输出，提取纯文本描述
-│   └── image-cache.ts      # 图片缓存（data/images/），供 infer-stickers / replay 复用
+│   └── image-cache.ts      # 图片缓存（data/images/），供 replay 复用
 ├── scripts/
 │   ├── start-agent.sh      # 后台启动 agent（写 PID、日志重定向）
 │   ├── stop-agent.sh       # 停止 agent
@@ -27,13 +25,11 @@ rin-research-humanize/
 │   ├── image-cache.test.ts
 │   ├── listen.test.ts
 │   ├── listen-image-cache.test.ts
-│   ├── index-stickers.test.ts
 │   ├── phash.test.ts
 │   └── agent/group-profile.test.ts   # 群聊特征 + 风格分析测试
 ├── data/
 │   ├── raw/                # 监听器 JSONL（运行时生成）
-│   ├── images/             # 图片缓存（listen 异步下载，供 infer-stickers 复用）
-│   └── inferences/         # 推理结果持久化（由 infer-stickers 生成）
+│   └── images/             # 图片缓存（listen 异步下载）
 ├── docs/
 │   └── experiment-logs/    # 实验记录
 ├── .env                    # 配置（参考 .env.example）
@@ -128,48 +124,6 @@ LLM_API_KEY=sk-xxx MAX_MSGS=22 bun run replay
 # 3. 观察回复是否收敛（短句、少语气词、自然）
 ```
 
-## 表情包索引
-
-从历史消息中识别图片/表情消息，建立可检索的索引。
-
-```bash
-bun run index-stickers                    # 全量索引所有会话
-SESSION=group_313214094 bun run index-stickers  # 指定会话
-```
-
-索引文件位于 `data/stickers/{session}.jsonl`，每条记录只存 msgId、session、type、content、昵称，**不存上下文**。上下文在需要时通过 `getStickerContext()` 从 `data/raw/` 反查：
-
-```ts
-import { getStickerContext } from "./src/index-stickers";
-
-// 前后各 3 条
-const ctx = getStickerContext(msgId, session);
-
-// 自定义窗口大小（前后各 5 条）
-const ctx5 = getStickerContext(msgId, session, 5);
-```
-
-窗口大小可在使用时动态调整，无需重新索引。
-
-### 图片缓存
-
-`listen.ts` 在收到图片消息时，会**异步**（fire-and-forget，不阻塞消息处理）将图片下载到 `data/images/` 目录：
-
-1. 消息写入 JSONL 后，后台启动下载
-2. 通过 `hasCache()` 检查是否已缓存，避免重复下载
-3. 下载失败时静默跳过（QQ CDN 需要鉴权，部分旧图片可能无法下载）
-4. 已缓存的图片可被 `infer-stickers` 直接读取，无需网络请求
-
-> ⚠ 仅从改动生效后新收到的图片才能成功缓存。已有索引中的旧图片（QQ CDN 链接）大概率已过期，会被静默跳过。
-
-### 推理持久化与图片去重
-
-`infer-stickers` 获取图片时先查本地缓存，无缓存时尝试从 CDN 即时下载。若均失败则跳过该条目的推理，不在结果文件中写入误导性含义。
-
-推理结果持久化到 `data/inferences/{session}.jsonl`，包含完整上下文和模型分析结果。已推理的条目自动跳过，加 `--reindex` 可强制重新推理。
-
-**图片去重**：`infer-stickers` 在调用视觉模型前会计算图片的感知哈希（dHash，`src/phash.ts`），与同一会话已推理的图片对比。汉明距离 ≤ 3 时视为重复，跳过推理。同一张表情包经过不同压缩/分辨率后仍能被识别为重复。
-
 ## 环境变量
 
 | 变量 | 说明 | 默认值 |
@@ -192,8 +146,6 @@ const ctx5 = getStickerContext(msgId, session, 5);
 | `bun run agent` | 前台运行 agent（含视觉问答循环：`[VISION]` 自主提问） |
 | `bun run listen` | 前台运行监听器 |
 | `bun run simulate` | 模拟重放（零成本评估 prompt） |
-| `bun run index-stickers` | 扫描并索引表情包到 data/stickers/ |
-| `bun run infer-stickers` | 扫描索引，pHash 去重后调用视觉模型推理，结果写入 data/inferences/，含 --reindex 选项 |
 | `bun run replay` | 重放历史消息并调 LLM（视觉消息使用固定「一句话描述」缓存，非实时问答） |
 | `bun run start-agent` | 后台启动 agent |
 | `bun run stop-agent` | 停止 agent |
