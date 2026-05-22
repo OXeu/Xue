@@ -114,7 +114,12 @@ export function indexSession(
   }
 
   const lines = readFileSync(rawPath, "utf8").trim().split("\n").filter(Boolean);
-  const entries: RawEntry[] = lines.map((l) => JSON.parse(l) as RawEntry);
+  const entries: RawEntry[] = [];
+  for (const l of lines) {
+    try {
+      entries.push(JSON.parse(l) as RawEntry);
+    } catch { /* skip corrupt lines */ }
+  }
   entries.sort((a, b) => a.time - b.time);
 
   const existing = loadExistingIds(session, stickersDir);
@@ -168,7 +173,12 @@ export function getStickerContext(
   if (!existsSync(rawPath)) return [];
 
   const lines = readFileSync(rawPath, "utf8").trim().split("\n").filter(Boolean);
-  const entries: RawEntry[] = lines.map((l) => JSON.parse(l) as RawEntry);
+  const entries: RawEntry[] = [];
+  for (const l of lines) {
+    try {
+      entries.push(JSON.parse(l) as RawEntry);
+    } catch { /* skip corrupt lines */ }
+  }
   entries.sort((a, b) => a.time - b.time);
 
   const idx = entries.findIndex((e) => e.msgId === msgId);

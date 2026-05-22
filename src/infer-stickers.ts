@@ -233,7 +233,12 @@ export async function processSession(
   if (!existsSync(stickerPath)) return { total: 0, success: 0, fail: 0, skipped: 0 };
 
   const lines = readFileSync(stickerPath, "utf8").trim().split("\n").filter(Boolean);
-  const stickers: StickerEntry[] = lines.map((l) => JSON.parse(l) as StickerEntry);
+  const stickers: StickerEntry[] = [];
+  for (const l of lines) {
+    try {
+      stickers.push(JSON.parse(l) as StickerEntry);
+    } catch { /* skip corrupt lines */ }
+  }
 
   // 加载已有推理结果的 msgId 集合和 pHash 列表
   const inferredIds = reindex ? new Set<number>() : loadInferredIds(session);
