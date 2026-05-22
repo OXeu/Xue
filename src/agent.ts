@@ -66,6 +66,73 @@ function log(msg: string): void {
   console.error(`[${ts()}] [agent] ${msg}`);
 }
 
+/** 从 OneBot raw_message 中提取被 @ 的 QQ 列表 */
+function parseAtUsers(raw: string): number[] {
+  const ids: number[] = [];
+  const re = /\[CQ:at,qq=(\d+)\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw)) !== null) {
+    ids.push(Number(m[1]));
+  }
+  return ids;
+}
+
+/** 剥离 CQ 码，提取纯文本内容 */
+function stripCqCodes(raw: string): string {
+  return raw
+    .replace(/\[CQ:[^\]]*\]/g, "")
+    .trim();
+}
+
+/** 粗略判断消息类型：纯文本 / 纯表情 / 纯图片 / 混合 */
+function estimateMsgType(raw: string): "text" | "face" | "image" | "mixed" {
+  const cqTypes = [...raw.matchAll(/\[CQ:(\w+),/g)].map((m) => m[1]);
+  if (cqTypes.length === 0) return "text";
+  if (cqTypes.every((t) => t === "face")) return "face";
+  if (cqTypes.every((t) => t === "image")) return "image";
+  if (cqTypes.every((t) => t === "text" || t === "face")) return "face";
+  return "mixed";
+}
+
+/** 简单中文停用词 */
+const STOPWORDS = new Set([
+  "的", "了", "是", "我", "你", "他", "她", "它", "在", "有",
+  "不", "就", "也", "都", "还", "这", "那", "什么", "怎么",
+  "一个", "这个", "那个", "我们", "你们", "他们", "可以",
+  "没有", "因为", "所以", "但是", "如果", "虽然", "不是",
+  "就是", "还是", "只是", "可是", "而且", "然后", "之后",
+  "之前", "现在", "今天", "明天", "昨天", "晚上", "早上",
+  "中午", "那个", "这种", "这样", "那种", "那个", "已经",
+  "应该", "可能", "大概", "比较", "非常", "真的", "其实",
+  "还是", "还是", "就是", "觉得", "知道", "看到", "听到",
+  "起来", "出来", "回来", "进去", "过来", "上去", "下来",
+  "一下", "一点", "一些", "一个", "这种", "那些", "这些",
+  "吗", "啊", "吧", "呢", "哦", "嗯", "哈", "哎", "哟",
+  "嘛", "嗯嗯", "哈哈", "hhh", "草", "淦", "靠",
+]);
+
+/** 从最近消息中提取高频关键词做话题摘要 */
+function extractKeywords(entries: ListenEntry[], maxTerms: number): string[] {
+  const freq = new Map<string, number>();
+  const wordRe = /[\u4e00-\u9fff\w]{2,}/g;
+
+  for (const e of entries) {
+    const text = stripCqCodes(e.text);
+    const words = text.match(wordRe);
+    if (!words) continue;
+    for (const w of words) {
+      const lower = w.toLowerCase();
+      if (lower.length < 2 || STOPWORDS.has(lower)) continue;
+      freq.set(lower, (freq.get(lower) || 0) + 1);
+    }
+  }
+
+  return [...freq.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, maxTerms)
+    .map(([w]) => w);
+}
+
 // ── 上下文 ──────────────────────────────────────────────
 
 function loadRecentMessages(sessionId: string, limit: number): ListenEntry[] {
@@ -133,15 +200,43 @@ function sendGroupMsg(ws: WebSocket, groupId: number, message: string): void {
 
 // ── 回复决策 ────────────────────────────────────────────
 
-function shouldReply(entry: ListenEntry, allEntries: ListenEntry[]): boolean {
+interface ReplyDecision {
+  should: boolean;
+  reason: string; // 用于 prompt 告知 LLM 的角色定位
+}
+
+function decideReply(entry: ListenEntry, msgType: string, rawText: string): ReplyDecision {
   // 不要回复自己的消息
-  if (entry.userId === BOT_QQ || entry.selfId === entry.userId) return false;
+  if (entry.userId === BOT_QQ || entry.selfId === entry.userId) {
+    return { should: false, reason: "self" };
+  }
 
-  // Bot 被 @ 了 → 必回
-  if (entry.atUsers.includes(BOT_QQ)) return true;
+  const isAtSelf = entry.atUsers.includes(BOT_QQ);
+  const isAtOther = entry.atUsers.length > 0 && !isAtSelf;
+  const mentioned = stripCqCodes(rawText).toLowerCase().includes(BOT_NAME.toLowerCase());
 
-  // 非 @ 消息按概率回复
-  return Math.random() < REPLY_CHANCE;
+  // 被 @（自己）→ 必回
+  if (isAtSelf) {
+    return { should: true, reason: "at-self" };
+  }
+
+  // 被提到名字 → 大概率回
+  if (mentioned) {
+    return { should: Math.random() < 0.7, reason: "mentioned" };
+  }
+
+  // 纯表情/图片 → 低概率
+  if (msgType === "face" || msgType === "image") {
+    return { should: Math.random() < 0.1, reason: "media" };
+  }
+
+  // 被 @ 别人 → 旁观者模式，降低概率
+  if (isAtOther) {
+    return { should: Math.random() < 0.15, reason: "bystander" };
+  }
+
+  // 默认
+  return { should: Math.random() < REPLY_CHANCE, reason: "random" };
 }
 
 // ── 主循环 ──────────────────────────────────────────────
@@ -197,32 +292,57 @@ function connect(): void {
 
     const groupId = data.group_id as number;
     const userId = data.user_id as number;
-    const msgText = typeof data.raw_message === "string" ? data.raw_message : "";
+    const rawMessage = typeof data.raw_message === "string" ? data.raw_message : "";
+
+    // 解析 @ 列表和消息类型
+    const atUsers = parseAtUsers(rawMessage);
+    const msgType = estimateMsgType(rawMessage);
+    const cleanText = stripCqCodes(rawMessage);
 
     const entry: ListenEntry = {
       session: `group_${groupId}`,
       msgId: data.message_id as number,
       time: data.time as number,
-      type: "text",
-      text: msgText,
+      type: msgType,
+      text: cleanText,
       userId,
       nickname: (data.sender as Record<string, unknown>)?.nickname as string || "",
       card: (data.sender as Record<string, unknown>)?.card as string || "",
       senderRole: (data.sender as Record<string, unknown>)?.role as string || "",
       subType: data.sub_type as string,
       selfId: data.self_id as number,
-      atUsers: [],
-      segmentTypes: ["text"],
+      atUsers,
+      segmentTypes: [],
     };
 
-    // 是否需要回复
-    if (!shouldReply(entry, [])) return;
+    // 决策是否回复
+    const decision = decideReply(entry, msgType, rawMessage);
+    if (!decision.should) return;
 
-    // 加载上下文
+    // 加载上下文 + 话题摘要
     const recent = loadRecentMessages(entry.session, MAX_CONTEXT);
     const contextText = buildContext(recent);
+    const keywords = extractKeywords(recent, 5);
+    const topicSummary = keywords.length > 0
+      ? `当前话题：${keywords.join("、")}`
+      : "";
 
-    log(`msg <${entry.nickname}> in ${entry.session}: ${msgText.slice(0, 80)}`);
+    // 决定角色定位（被 @ 了 vs 旁观者）
+    let roleInstruction: string;
+    if (decision.reason === "at-self") {
+      roleInstruction = `【消息是发给你的，你被直接 @ 了，请以 ${BOT_NAME} 的身份回应。】`;
+    } else if (decision.reason === "mentioned") {
+      roleInstruction = `【消息中提到了你的名字（${BOT_NAME}），虽然没 @ 你，但你可以接话。】`;
+    } else if (decision.reason === "bystander") {
+      roleInstruction = `【这条消息不是发给你的。你只是群里的旁观者，如果实在想说点什么可以接一句，但不要抢话。】`;
+    } else if (decision.reason === "media") {
+      roleInstruction = `【这是一个表情/图片消息。你可以简单评价一下，也可以忽略。】`;
+    } else {
+      roleInstruction = `【你只是群里的普通成员，想回就回，不想回就不回。】`;
+    }
+
+    const senderName = entry.card || entry.nickname;
+    log(`msg <${senderName}> in ${entry.session} [${decision.reason}]: ${cleanText.slice(0, 80)}`);
 
     try {
       const reply = await callLlm([
@@ -230,15 +350,15 @@ function connect(): void {
           role: "system",
           content: [
             `你叫${BOT_NAME}，是一个在 QQ 群里聊天的人类。`,
-            `你的回复要简短、自然，像真的群友在说话。`,
-            `不要列点，不要用 formal 语气，不要每条都回得很完整。`,
-            `偶尔可以只回几个字或一个表情。`,
-            `下面是这个群最近的消息：`,
-          ].join("\n"),
+            `回复要简短、自然，像真人。不要列点，不要 formal。`,
+            topicSummary,
+            `\n下面是这个群最近的消息：`,
+            roleInstruction,
+          ].filter(Boolean).join("\n"),
         },
         {
           role: "user",
-          content: `【群聊上下文】\n${contextText}\n\n【新消息】${entry.nickname}: ${msgText}\n\n请以 ${BOT_NAME} 的身份回复这条消息（如果觉得没什么好说的也可以不回）。`,
+          content: `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${cleanText}\n\n请以 ${BOT_NAME} 的身份自然回复。`,
         },
       ]);
 
