@@ -195,6 +195,35 @@ function extractKeywords(entries: ListenEntry[], maxTerms: number): string[] {
     .map(([w]) => w);
 }
 
+/** 分析最近消息的气氛（正常 / 偏紧 / 有分歧） */
+function analyzeAtmosphere(entries: ListenEntry[]): string {
+  if (entries.length < 5) return "";
+
+  let disagreementCount = 0;
+  let negativeCount = 0;
+  let totalMsg = 0;
+
+  const disagreementRe = /但是|不对|你搞错|错了|不是|反而|明明|难道|凭什么|你说的|你的意思|我觉得不是|你确定/i;
+  const negativeRe = /垃圾|傻[逼叉]|无语|服了|醉了|吐了|离谱|有病|恶心|过分|算了吧|呵呵|呵呵|有毛病/i;
+
+  for (const e of entries) {
+    const text = e.text;
+    if (!text) continue;
+    totalMsg++;
+    if (disagreementRe.test(text)) disagreementCount++;
+    if (negativeRe.test(text)) negativeCount++;
+  }
+
+  if (totalMsg === 0) return "";
+
+  const disagreeRatio = disagreementCount / totalMsg;
+  const negativeRatio = negativeCount / totalMsg;
+
+  if (disagreeRatio > 0.3 || negativeRatio > 0.2) return "气氛：有分歧";
+  if (disagreeRatio > 0.15 || negativeRatio > 0.1) return "气氛：偏紧";
+  return "气氛：正常";
+}
+
 // ── 图片理解 ────────────────────────────────────────────
 
 /** 从 CQ 码中提取第一个图片的 url（返回 null 表示无 url） */
@@ -622,6 +651,7 @@ async function quickDecideSilence(
   messageText: string,
   scenarioKey: string,
   topicSummary: string,
+  atmosphereTag: string,
 ): Promise<string | null> {
   const url = `${LLM_BASE_URL.replace(/\/+$/, "")}/chat/completions`;
   const scenarioPrompt = getScenarioPrompt(scenarioKey, BOT_NAME);
@@ -630,6 +660,7 @@ async function quickDecideSilence(
     getSystemPrompt(BOT_NAME),
     getReplyRules(),
     topicSummary,
+    atmosphereTag,
     `\n下面是这个群最近的消息：`,
     `【${scenarioPrompt}】`,
   ].filter(Boolean).join("\n");
@@ -806,6 +837,7 @@ function connect(): void {
     const topicSummary = keywords.length > 0
       ? `当前话题：${keywords.join("、")}`
       : "";
+    const atmosphereTag = analyzeAtmosphere(recent);
 
     const scenarioKey = isPrivate ? "private" : decision.reason;
 
@@ -813,7 +845,7 @@ function connect(): void {
     const lowCertainty = scenarioKey === "random" || scenarioKey === "bystander" || scenarioKey === "media";
     if (lowCertainty) {
       const quickReply = await quickDecideSilence(
-        contextText, senderName, cleanText, scenarioKey, topicSummary,
+        contextText, senderName, cleanText, scenarioKey, topicSummary, atmosphereTag,
       );
       if (!quickReply || quickReply.toUpperCase() === "SILENT") {
         log(`silent (model chose not to speak)`);
@@ -871,6 +903,7 @@ function connect(): void {
         buildSessionProfile(entry.session),
         styleGuidance(buildSessionProfile(entry.session)),
         topicSummary,
+        atmosphereTag,
         `\n下面是这个群最近的消息：`,
         roleInstruction,
       ];
