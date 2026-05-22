@@ -11,6 +11,7 @@ rin-research-humanize/
 ├── src/
 │   ├── agent.ts            # 主 agent：WS 监听 → 上下文 → LLM → 回复
 │   ├── listen.ts           # 消息监听器（只收不发，记录 JSONL 作为上下文和历史）
+│   ├── index-stickers.ts   # 表情包索引器：从历史消息中提取图片/表情并附上下文
 │   ├── simulate.ts         # 模拟重放：不调 LLM，只输出决策和 prompt，零成本评估
 │   ├── replay.ts           # 重放历史消息：调 LLM 生成实际回复，用于验证
 │   ├── clean-vision.ts     # 清洗视觉模型的 reasoning 输出，提取纯文本描述
@@ -23,6 +24,7 @@ rin-research-humanize/
 │   ├── clean-vision.test.ts
 │   ├── image-cache.test.ts
 │   ├── listen.test.ts
+│   ├── index-stickers.test.ts
 │   └── agent/group-profile.test.ts   # 群聊特征 + 风格分析测试
 ├── data/
 │   ├── raw/                # 监听器 JSONL（运行时生成）
@@ -123,9 +125,10 @@ LLM_API_KEY=sk-xxx MAX_MSGS=22 bun run replay
 | `bun run agent` | 前台运行 agent |
 | `bun run listen` | 前台运行监听器 |
 | `bun run simulate` | 模拟重放（零成本评估 prompt） |
+| `bun run index-stickers` | 扫描并索引表情包到 data/stickers/ |
 | `bun run replay` | 重放历史消息并调 LLM |
 | `bun run start-agent` | 后台启动 agent |
 | `bun run stop-agent` | 停止 agent |
 | `bun run status-agent` | 检查 agent 状态 |
-| `bun test` | 运行测试（71 例） |
+| `bun test` | 运行测试（83 例） |
 | `bun run typecheck` | TypeScript 类型检查 |

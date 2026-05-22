@@ -21,10 +21,10 @@ const STICKERS_DIR = resolve(import.meta.dirname, "../data/stickers");
 // 上下文窗口：每条表情消息携带前后各 N 条消息
 const CONTEXT_WINDOW = 3;
 
-// 已被索引的 msgId 集合（每个 session 独立）
-const indexed = new Map<string, Set<number>>();
+/** 被索引的 msgId 集合（每个 session 独立），导出供测试重置。 */
+export const indexed = new Map<string, Set<number>>();
 
-interface RawEntry {
+export interface RawEntry {
   session: string;
   msgId: number;
   time: number;
@@ -38,7 +38,7 @@ interface RawEntry {
   raw_message: string;
 }
 
-interface StickerEntry {
+export interface StickerEntry {
   msgId: number;
   time: number;
   session: string;
@@ -61,8 +61,9 @@ function ensureDir(dir: string): void {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 }
 
-function loadExistingIndex(session: string): Set<number> {
-  const path = join(STICKERS_DIR, `${session}.jsonl`);
+function loadExistingIndex(session: string, stickersDir?: string): Set<number> {
+  const dir = stickersDir || STICKERS_DIR;
+  const path = join(dir, `${session}.jsonl`);
   if (!existsSync(path)) return new Set();
   const ids = new Set<number>();
   const lines = readFileSync(path, "utf8").trim().split("\n").filter(Boolean);
@@ -76,13 +77,13 @@ function loadExistingIndex(session: string): Set<number> {
 }
 
 /** 从 CQ 码中提取 face ID */
-function parseFaceId(raw: string): string | null {
+export function parseFaceId(raw: string): string | null {
   const m = raw.match(/\[CQ:face,id=(\d+)\]/);
   return m ? m[1] : null;
 }
 
 /** 判断一条消息是否包含表情/图片（需要索引的） */
-function isStickerCandidate(e: RawEntry): boolean {
+export function isStickerCandidate(e: RawEntry): boolean {
   if (e.segmentTypes.includes("image") && e.imageUrls && e.imageUrls.length > 0) return true;
   if (e.segmentTypes.includes("face")) return true;
   // 也检查 raw_message 中是否有 CQ:image（兼容 segmentTypes 未记录的情况）
@@ -91,7 +92,7 @@ function isStickerCandidate(e: RawEntry): boolean {
 }
 
 /** 为一条消息提取 sticker 内容 */
-function extractContent(e: RawEntry): { type: "image" | "face"; content: string } | null {
+export function extractContent(e: RawEntry): { type: "image" | "face"; content: string } | null {
   if (e.imageUrls && e.imageUrls.length > 0) {
     return { type: "image", content: e.imageUrls[0] };
   }
@@ -107,11 +108,22 @@ function extractContent(e: RawEntry): { type: "image" | "face"; content: string 
   return null;
 }
 
-function indexSession(session: string): void {
-  const rawPath = join(RAW_DIR, `${session}.jsonl`);
+/**
+ * 索引一个会话的表情包消息。导出供测试调用。
+ * @param options.rawDir 覆盖 raw 目录（默认 data/raw）
+ * @param options.stickersDir 覆盖 stickers 目录（默认 data/stickers）
+ */
+export function indexSession(
+  session: string,
+  options?: { rawDir?: string; stickersDir?: string },
+): { newCount: number; existingCount: number } {
+  const rawDir = options?.rawDir || RAW_DIR;
+  const stickersDir = options?.stickersDir || STICKERS_DIR;
+  ensureDir(stickersDir);
+  const rawPath = join(rawDir, `${session}.jsonl`);
   if (!existsSync(rawPath)) {
     console.log(`  [skip] ${session}: no raw data`);
-    return;
+    return { newCount: 0, existingCount: 0 };
   }
 
   const lines = readFileSync(rawPath, "utf8").trim().split("\n").filter(Boolean);
@@ -121,10 +133,10 @@ function indexSession(session: string): void {
   entries.sort((a, b) => a.time - b.time);
 
   // 加载已索引的 msgId
-  const existing = loadExistingIndex(session);
+  const existing = loadExistingIndex(session, stickersDir);
 
   let newCount = 0;
-  const stickerPath = join(STICKERS_DIR, `${session}.jsonl`);
+  const stickerPath = join(stickersDir, `${session}.jsonl`);
 
   for (let i = 0; i < entries.length; i++) {
     const e = entries[i];
@@ -163,6 +175,7 @@ function indexSession(session: string): void {
   }
 
   console.log(`  ${session}: ${newCount} new stickers (${existing.size} already indexed)`);
+  return { newCount, existingCount: existing.size };
 }
 
 function main(): void {
