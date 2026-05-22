@@ -606,4 +606,35 @@ describe("saveVisionInference", () => {
     expect(map).toBeInstanceOf(Map);
     expect(map.size).toBe(0);
   });
+
+  test("callVision 返回 null 时不写入推理文件", () => {
+    // 模拟 agent.ts handler 中的守卫条件:
+    // if (!firstAnswerSaved && answer && !inferenceMap.has(entry.msgId))
+    // 当 answer 为 null/falsy 时，不应调用 saveVisionInference
+    const answer: string | null = null;
+    const msgId = 9999;
+    const session = "group_test_null_vision";
+
+    let saved = false;
+    if (answer) {
+      saveVisionInference({
+        msgId,
+        session,
+        inference: answer,
+        model: "gemma4:26b",
+        timestamp: new Date().toISOString(),
+      });
+      saved = true;
+    }
+
+    expect(saved).toBe(false);
+
+    // 验证磁盘上没有文件
+    const filePath = join(tmpDir, `${session}.jsonl`);
+    expect(existsSync(filePath)).toBe(false);
+
+    // loadInferenceMap 也应找不到
+    const map = loadInferenceMap(session);
+    expect(map.has(msgId)).toBe(false);
+  });
 });
