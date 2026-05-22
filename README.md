@@ -136,11 +136,13 @@ const ctx5 = getStickerContext(msgId, session, 5);
 1. 消息写入 JSONL 后，后台启动下载
 2. 通过 `hasCache()` 检查是否已缓存，避免重复下载
 3. 下载失败时静默跳过（QQ CDN 需要鉴权，部分旧图片可能无法下载）
-4. 已缓存的图片可被 `infer-stickers` 直接读取，无需 picsum fallback
+4. 已缓存的图片可被 `infer-stickers` 直接读取，无需网络请求
+
+`infer-stickers` 获取图片时先查本地缓存，无缓存时尝试从 CDN 即时下载。若均失败则跳过该条目的推理，不在结果文件中写入误导性含义。
 
 推理结果持久化到 `data/inferences/{session}.jsonl`，包含完整上下文和模型分析结果。已推理的条目自动跳过，加 `--reindex` 可强制重新推理。
 
-> ⚠ 仅从改动生效后新收到的图片才能成功缓存。已有索引中的旧图片（QQ CDN 链接）大概率已过期。
+> ⚠ 仅从改动生效后新收到的图片才能成功缓存。已有索引中的旧图片（QQ CDN 链接）大概率已过期，会被静默跳过。
 
 ## 环境变量
 
