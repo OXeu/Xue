@@ -25,13 +25,12 @@
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { cleanVisionDescription } from "./clean-vision";
-import { saveCachedImage, getCachedDescription } from "./image-cache";
+
 import {
   getSystemPrompt,
   getScenarioPrompt,
   getReplyRules,
   getVisionFormat,
-  clearPromptCaches,
 } from "./prompts";
 
 // ── 配置 ────────────────────────────────────────────────
@@ -182,28 +181,11 @@ async function downloadImage(url: string): Promise<{ base64: string; mime: strin
 
 // cleanVisionDescription 已通过 import 导入（实现在 clean-vision.ts）
 
-/** 调用视觉 LLM 描述图片，返回一句话描述，失败返回 null。
- *  若传入 session + msgId，会先查缓存，成功描述后也写入缓存。 */
-async function describeImage(
-  cqMatch: string,
-  session?: string,
-  msgId?: number,
-): Promise<string | null> {
+/** 调用视觉模型回答一个问题，返回回答文本，失败返回 null */
+async function callVision(query: string, base64: string, mime: string): Promise<string | null> {
   if (!VISION_MODEL) return null;
 
-  // 查缓存（重放场景下直接走缓存，不调视觉模型）
-  if (session && msgId) {
-    const cached = getCachedDescription(session, msgId);
-    if (cached) return cached;
-  }
-
-  const url = parseFirstImageUrl(cqMatch);
-  if (!url) return null;
-
-  const img = await downloadImage(url);
-  if (!img) return null;
-
-  const dataUri = `data:${img.mime};base64,${img.base64}`;
+  const dataUri = `data:${mime};base64,${base64}`;
 
   try {
     const headers: Record<string, string> = {
@@ -219,12 +201,12 @@ async function describeImage(
         messages: [{
           role: "user",
           content: [
-            { type: "text", text: "用一句话简短描述这张图片的内容" },
+            { type: "text", text: query },
             { type: "image_url", image_url: { url: dataUri } },
           ],
         }],
-        max_tokens: 100,
-        temperature: 0.5,
+        max_tokens: 200,
+        temperature: 0.3,
       }),
     });
 
@@ -234,28 +216,16 @@ async function describeImage(
     };
     const msg = json.choices?.[0]?.message;
 
-    // 优先从 reasoning 字段提取，清洗后若无有效描述回退到 content
     const rawReasoning = msg?.reasoning?.trim();
     if (rawReasoning) {
       const clean = cleanVisionDescription(rawReasoning);
-      if (clean) {
-        // 写入缓存供后续 replay 使用
-        if (session && msgId) {
-          try { saveCachedImage(session, msgId, img.base64, img.mime, clean, url); } catch {}
-        }
-        return clean;
-      }
+      if (clean) return clean;
     }
 
     const rawContent = msg?.content?.trim();
     if (rawContent) {
       const clean = cleanVisionDescription(rawContent);
-      if (clean) {
-        if (session && msgId) {
-          try { saveCachedImage(session, msgId, img.base64, img.mime, clean, url); } catch {}
-        }
-        return clean;
-      }
+      if (clean) return clean;
     }
 
     return null;
@@ -550,15 +520,6 @@ function connect(): void {
       : decideReply(entry, msgType, rawMessage);
     if (!decision.should) return;
 
-    // 如果有图片，尝试获取描述
-    let imageDescription: string | null = null;
-    if (/\[CQ:image/.test(rawMessage)) {
-      imageDescription = await describeImage(rawMessage, entry.session, entry.msgId);
-      if (imageDescription) {
-        log(`img: ${imageDescription.slice(0, 120)}`);
-      }
-    }
-
     // 加载上下文 + 话题摘要
     const recent = loadRecentMessages(entry.session, MAX_CONTEXT);
     const contextText = buildContext(recent);
@@ -567,52 +528,87 @@ function connect(): void {
       ? `当前话题：${keywords.join("、")}`
       : "";
 
-    // 决定角色定位
     const scenarioKey = isPrivate ? "private" : decision.reason;
-    let roleInstruction = `【${getScenarioPrompt(scenarioKey, BOT_NAME)}】`;
-    if (imageDescription) {
-      roleInstruction = `【${getVisionFormat().replace("{IMAGE_DESCRIPTION}", imageDescription)}】`;
-    }
+    const roleInstruction = `【${getScenarioPrompt(scenarioKey, BOT_NAME)}】`;
 
     const senderName = entry.card || entry.nickname;
     log(`msg <${senderName}> in ${entry.session} [${decision.reason}]: ${cleanText.slice(0, 80)}`);
 
-    try {
-      const reply = await callLlm([
-        {
-          role: "system",
-          content: [
-            getSystemPrompt(BOT_NAME),
-            getReplyRules(),
-            buildSessionProfile(entry.session),
-            styleGuidance(buildSessionProfile(entry.session)),
-            topicSummary,
-            `\n下面是这个群最近的消息：`,
-            roleInstruction,
-          ].filter(Boolean).join("\n"),
-        },
-        {
-          role: "user",
-          content: `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${cleanText}\n\n请以 ${BOT_NAME} 的身份自然回复。`,
-        },
-      ]);
+    // 如果有图片，先下载图片（后续由 Agent 自主决定问什么）
+    let downloadedImg: { base64: string; mime: string } | null = null;
+    if (/\[CQ:image/.test(rawMessage)) {
+      const imgUrl = parseFirstImageUrl(rawMessage);
+      if (imgUrl) downloadedImg = await downloadImage(imgUrl);
+    }
 
-      if (reply) {
+    try {
+      // 构造系统提示
+      const systemParts = [
+        getSystemPrompt(BOT_NAME),
+        getReplyRules(),
+        buildSessionProfile(entry.session),
+        styleGuidance(buildSessionProfile(entry.session)),
+        topicSummary,
+        `\n下面是这个群最近的消息：`,
+        roleInstruction,
+      ];
+      if (downloadedImg && VISION_MODEL) {
+        systemParts.push(`\n\n${getVisionFormat()}`);
+      }
+
+      // 初始消息列表
+      const messages: { role: string; content: string }[] = [{
+        role: "system",
+        content: systemParts.filter(Boolean).join("\n"),
+      }, {
+        role: "user",
+        content: downloadedImg
+          ? `【群聊上下文】\n${contextText}\n\n【新消息（含图片）】${senderName}: ${cleanText}\n\n请以 ${BOT_NAME} 的身份自然回复。`
+          : `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${cleanText}\n\n请以 ${BOT_NAME} 的身份自然回复。`,
+      }];
+
+      // 视觉循环：Agent 自主决定问什么，可以多轮追问
+      let finalReply: string | null = null;
+      let rounds = 0;
+
+      while (!finalReply && rounds < 5) {
+        rounds++;
+        const response = await callLlm(messages);
+
+        // 检查是否包含视觉提问
+        const visionMatch = response.match(/\[VISION\]([\s\S]*?)\[\/VISION\]/);
+
+        if (visionMatch && downloadedImg && VISION_MODEL) {
+          const query = visionMatch[1].trim();
+          log(`[vision q] ${query.slice(0, 100)}`);
+
+          const answer = await callVision(query, downloadedImg.base64, downloadedImg.mime);
+          const displayAnswer = answer || "(分析失败)";
+          log(`[vision a] ${displayAnswer.slice(0, 100)}`);
+
+          messages.push({ role: "assistant", content: response });
+          messages.push({ role: "user", content: `【图片回答】${displayAnswer}\n\n还需要问什么吗？已经够了就直接回复。` });
+        } else {
+          finalReply = response;
+        }
+      }
+
+      if (finalReply) {
         if (DRY_RUN) {
-          log(`[dry-run] would reply to ${entry.session}: ${reply.slice(0, 200)}`);
+          log(`[dry-run] would reply to ${entry.session}: ${finalReply.slice(0, 200)}`);
         } else if (isPrivate) {
           const payload = JSON.stringify({
             action: "send_private_msg",
-            params: { user_id: userId, message: reply },
+            params: { user_id: userId, message: finalReply },
           });
           ws!.send(payload);
-          log(`replied private: ${reply.slice(0, 100)}`);
+          log(`replied private: ${finalReply.slice(0, 100)}`);
         } else {
-          sendGroupMsg(ws!, data.group_id as number, reply);
-          log(`replied: ${reply.slice(0, 100)}`);
+          sendGroupMsg(ws!, data.group_id as number, finalReply);
+          log(`replied: ${finalReply.slice(0, 100)}`);
         }
       } else {
-        log("LLM returned empty, skipped");
+        log("vision loop exceeded max rounds, no reply");
       }
     } catch (err) {
       log(`LLM error: ${err instanceof Error ? err.message : String(err)}`);
