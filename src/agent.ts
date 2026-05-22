@@ -182,22 +182,26 @@ async function downloadImage(url: string): Promise<{ base64: string; mime: strin
 // cleanVisionDescription 已通过 import 导入（实现在 clean-vision.ts）
 
 /** 调用视觉模型回答一个问题，返回回答文本，失败返回 null */
-async function callVision(query: string, base64: string, mime: string): Promise<string | null> {
-  if (!VISION_MODEL) return null;
+export async function callVision(query: string, base64: string, mime: string): Promise<string | null> {
+  const visionModel = process.env.VISION_MODEL || VISION_MODEL || "";
+  if (!visionModel) return null;
+
+  const visionBaseUrl = (process.env.VISION_BASE_URL || VISION_BASE_URL).replace(/\/+$/, "");
+  const apiKey = process.env.LLM_API_KEY || LLM_API_KEY || "ollama";
 
   const dataUri = `data:${mime};base64,${base64}`;
 
   try {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${LLM_API_KEY || "ollama"}`,
+      "Authorization": `Bearer ${apiKey}`,
     };
 
-    const res = await fetch(`${VISION_BASE_URL}/chat/completions`, {
+    const res = await fetch(`${visionBaseUrl}/chat/completions`, {
       method: "POST",
       headers,
       body: JSON.stringify({
-        model: VISION_MODEL,
+        model: visionModel,
         messages: [{
           role: "user",
           content: [
