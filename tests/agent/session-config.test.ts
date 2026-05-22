@@ -2,10 +2,13 @@
  * tests/agent/session-config.test.ts — session-config.json 加载逻辑与回复决策测试
  *
  * 覆盖：
- * - loadSessionConfig（配置文件不存在、缺失字段、完整配置、非法 JSON）
+ * - loadSessionConfig（配置文件不存在、缺失字段、完整配置、非法 JSON、
+ *   session 级 probabilities/replyChance 覆写）
  * - loadProbabilities（同上 + 部分字段回退）
+ * - getProbsForSession（全局回退、session 覆写）
+ * - getReplyChanceForSession（全局回退、session 覆写）
  * - canReplyReal（会话覆写、全局 DRY_RUN 优先级）
- * - decideReply（@、自己消息、概率覆写）
+ * - decideReply（@、自己消息、概率覆写、replyChance 覆写）
  */
 
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
@@ -53,6 +56,8 @@ const {
   loadProbabilities,
   canReplyReal,
   decideReply,
+  getProbsForSession,
+  getReplyChanceForSession,
 } = mod;
 
 // 辅助构造 ListenEntry
@@ -133,6 +138,46 @@ describe("loadSessionConfig", () => {
     expect(cfg).toEqual({ group_a: { reply: true } });
     expect("probabilities" in cfg).toBe(false);
   });
+
+  test("session 级 probabilities 覆写", () => {
+    const p = writeConfig({
+      group_a: { reply: true, probabilities: { mentioned: 0.9, media: 0.2, bystander: 0.01 } },
+    });
+    const cfg = loadSessionConfig(p);
+    expect(cfg.group_a?.probabilities).toEqual({ mentioned: 0.9, media: 0.2, bystander: 0.01 });
+  });
+
+  test("session 级 probabilities 部分字段回退到默认值", () => {
+    const p = writeConfig({
+      group_a: { reply: true, probabilities: { mentioned: 0.9 } },
+    });
+    const cfg = loadSessionConfig(p);
+    expect(cfg.group_a?.probabilities?.mentioned).toBe(0.9);
+    expect(cfg.group_a?.probabilities?.media).toBe(DEFAULT_PROBS.media);
+    expect(cfg.group_a?.probabilities?.bystander).toBe(DEFAULT_PROBS.bystander);
+  });
+
+  test("session 级 replyChance 覆写", () => {
+    const p = writeConfig({
+      group_a: { reply: true, replyChance: 0.5 },
+    });
+    const cfg = loadSessionConfig(p);
+    expect(cfg.group_a?.replyChance).toBe(0.5);
+  });
+
+  test("session 级 probabilities + replyChance 同时生效", () => {
+    const p = writeConfig({
+      group_a: {
+        reply: true,
+        probabilities: { mentioned: 0.8, media: 0.1, bystander: 0.02 },
+        replyChance: 0.15,
+      },
+    });
+    const cfg = loadSessionConfig(p);
+    expect(cfg.group_a?.reply).toBe(true);
+    expect(cfg.group_a?.probabilities).toEqual({ mentioned: 0.8, media: 0.1, bystander: 0.02 });
+    expect(cfg.group_a?.replyChance).toBe(0.15);
+  });
 });
 
 describe("loadProbabilities", () => {
@@ -211,6 +256,28 @@ describe("canReplyReal", () => {
   test("dryRunOverride=false 时所有会话返回 true", () => {
     expect(canReplyReal("group_b", { configOverride: config, dryRunOverride: false })).toBe(true);
     expect(canReplyReal("group_unknown", { configOverride: config, dryRunOverride: false })).toBe(true);
+  });
+});
+
+// ════════════════════════════════════════════════════════
+// getProbsForSession / getReplyChanceForSession
+// ════════════════════════════════════════════════════════
+
+// 这些测试依赖模块级 _sessionConfig，只能测未配置会话的回退行为。
+// session 覆写场景在 loadSessionConfig 的用例中已验证了加载逻辑，
+// 完整的 getProbsForSession 覆写链路通过集成配置文件 test 文件来验证。
+
+describe("getProbsForSession", () => {
+  test("未配置的会话回退到全局默认值", () => {
+    const p = getProbsForSession("nonexistent_session");
+    expect(p).toEqual(DEFAULT_PROBS);
+  });
+});
+
+describe("getReplyChanceForSession", () => {
+  test("未配置的会话回退到全局默认值", () => {
+    const c = getReplyChanceForSession("nonexistent_session");
+    expect(c).toBe(0.3);
   });
 });
 
@@ -340,6 +407,39 @@ describe("decideReply", () => {
       );
       // 名字检测走 mentioned 分支
       if (d.reason === "mentioned") {
+        expect(d.should).toBe(true);
+        return;
+      }
+    }
+  });
+
+  test("replyChance=0.0 时 random 分支从不回复", () => {
+    // 无 @、无名字、非图片、非旁观 → 命中 random 分支
+    for (let i = 0; i < 50; i++) {
+      const d = decideReply(
+        makeEntry({ userId: 999, atUsers: [], nickname: "陌生人", text: "今天天气不错" }),
+        "text", "今天天气不错",
+        { mentioned: 0, media: 0, bystander: 0 },
+        testBotQQ,
+        0.0, // replyChance = 0
+      );
+      if (d.reason === "random") {
+        expect(d.should).toBe(false);
+        return;
+      }
+    }
+  });
+
+  test("replyChance=1.0 时 random 分支总是回复", () => {
+    for (let i = 0; i < 50; i++) {
+      const d = decideReply(
+        makeEntry({ userId: 999, atUsers: [], nickname: "陌生人", text: "今天天气不错" }),
+        "text", "今天天气不错",
+        { mentioned: 0, media: 0, bystander: 0 },
+        testBotQQ,
+        1.0, // replyChance = 1
+      );
+      if (d.reason === "random") {
         expect(d.should).toBe(true);
         return;
       }

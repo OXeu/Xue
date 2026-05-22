@@ -55,7 +55,7 @@ export {
 
 // 配置加载与决策导出（供测试使用）
 export type { SessionConfig, ReplyProbabilities };
-export { DEFAULT_PROBS, loadSessionConfig, loadProbabilities, canReplyReal, decideReply };
+export { DEFAULT_PROBS, loadSessionConfig, loadProbabilities, canReplyReal, decideReply, getProbsForSession, getReplyChanceForSession };
 
 import {
   getSystemPrompt,
@@ -84,6 +84,10 @@ const CONFIG_PATH = resolve(import.meta.dirname, "../config/session-config.json"
 
 interface SessionConfig {
   reply: boolean;
+  /** 按会话覆写回复概率，不配置则使用全局 probabilities。 */
+  probabilities?: ReplyProbabilities;
+  /** 按会话覆写 random 分支的回复概率（对应环境变量 REPLY_CHANCE）。 */
+  replyChance?: number;
 }
 
 /** 各场景回复概率。不配置则使用代码默认值。*/
@@ -110,9 +114,22 @@ function loadSessionConfig(configPath?: string): Record<string, SessionConfig> {
     for (const [key, val] of Object.entries(parsed)) {
       if (key === "probabilities") continue; // 全局概率，不走 session 配置
       if (val && typeof val === "object" && "reply" in (val as Record<string, unknown>)) {
-        const v = val as { reply?: boolean };
+        const v = val as { reply?: boolean; probabilities?: Partial<ReplyProbabilities>; replyChance?: number };
         if (typeof v.reply === "boolean") {
-          result[key] = { reply: v.reply };
+          const session: SessionConfig = { reply: v.reply };
+          // 按会话覆写概率
+          if (v.probabilities && typeof v.probabilities === "object") {
+            const p: ReplyProbabilities = { ...DEFAULT_PROBS };
+            if (typeof v.probabilities.mentioned === "number") p.mentioned = v.probabilities.mentioned;
+            if (typeof v.probabilities.media === "number") p.media = v.probabilities.media;
+            if (typeof v.probabilities.bystander === "number") p.bystander = v.probabilities.bystander;
+            session.probabilities = p;
+          }
+          // 按会话覆写 random 概率
+          if (typeof v.replyChance === "number") {
+            session.replyChance = v.replyChance;
+          }
+          result[key] = session;
         }
       }
     }
@@ -159,6 +176,16 @@ function canReplyReal(sessionId: string, overrides?: {
   const cfg = (overrides?.configOverride ?? _sessionConfig)[sessionId];
   if (cfg !== undefined) return cfg.reply; // 会话配置覆写
   return false; // 全局 dry-run 且无配置 → dry-run
+}
+
+/** 获取某会话的回复概率，未配置则使用全局概率。 */
+function getProbsForSession(sessionId: string): ReplyProbabilities {
+  return _sessionConfig[sessionId]?.probabilities ?? _replyProbs;
+}
+
+/** 获取某会话的 random 分支回复概率，未配置则使用全局 REPLY_CHANCE。 */
+function getReplyChanceForSession(sessionId: string): number {
+  return _sessionConfig[sessionId]?.replyChance ?? REPLY_CHANCE;
 }
 
 /** 临时图片缓存：pHash → base64 + mime。在单次 onmessage 调用期间有效。 */
@@ -381,7 +408,7 @@ interface ReplyDecision {
   reason: string; // 用于 prompt 告知 LLM 的角色定位
 }
 
-function decideReply(entry: ListenEntry, msgType: string, rawText: string, probs?: ReplyProbabilities, botQQ?: number): ReplyDecision {
+function decideReply(entry: ListenEntry, msgType: string, rawText: string, probs?: ReplyProbabilities, botQQ?: number, replyChance?: number): ReplyDecision {
   const botId = botQQ ?? BOT_QQ;
   // 不要回复自己的消息
   if (entry.userId === botId || entry.selfId === entry.userId) {
@@ -416,7 +443,8 @@ function decideReply(entry: ListenEntry, msgType: string, rawText: string, probs
   }
 
   // 默认
-  return { should: Math.random() < REPLY_CHANCE, reason: "random" };
+  const chance = replyChance ?? REPLY_CHANCE;
+  return { should: Math.random() < chance, reason: "random" };
 }
 
 // ── 主循环 ──────────────────────────────────────────────
@@ -502,7 +530,7 @@ function connect(): void {
     // 决策是否回复（私聊必回但跳过自己的消息，群聊按原有逻辑）
     const decision = isPrivate
       ? { should: userId !== BOT_QQ, reason: "private" }
-      : decideReply(entry, msgType, rawMessage, _replyProbs);
+      : decideReply(entry, msgType, rawMessage, getProbsForSession(sessionId), undefined, getReplyChanceForSession(sessionId));
     if (!decision.should) return;
 
     const senderName = entry.card || entry.nickname;
