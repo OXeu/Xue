@@ -617,11 +617,10 @@ function connect(): void {
       continuationHint = `（你刚才回复过 ${senderName}，这可能是对刚才对话的继续）`;
     }
 
-    // 低确定性触发：先做快速沉默检查，但附带图片描述（如有）
+    // 低确定性触发：先做快速沉默检查
     const lowCertainty = scenarioKey === "random" || scenarioKey === "bystander" || scenarioKey === "media";
     if (lowCertainty) {
-      // 如果消息包含图片，先下载并做单轮视觉描述
-      let imageDesc = "";
+      // 如果有图片，下载并缓存（供下游复用），但不预识别
       if (/\[CQ:image/.test(rawMessage)) {
         const imgUrl = parseFirstImageUrl(rawMessage);
         if (imgUrl) {
@@ -635,29 +634,13 @@ function connect(): void {
             const phash = await computeDHash(downloaded.base64, downloaded.mime);
             _imageCache.set(phash, downloaded);
             _recentUserImage.set(_recentUserKey, { downloaded, phash, time: Date.now() });
-            if (VISION_MODEL) {
-              const answer = await callVision("用一条简短的自然语句描述这张图片的核心内容：主体是什么、情绪或氛围如何、是否包含文字。不要模板化的描述。", downloaded.base64, downloaded.mime);
-              if (answer && !isVagueDescription(answer)) {
-                imageDesc = answer;
-              }
-            }
           }
         }
       }
-      // 当前消息无图但同一用户刚发过图 → 复用缓存图片描述
-      if (!imageDesc && _recentUserCache && VISION_MODEL) {
-        const answer = await callVision("用一条简短的自然语句描述这张图片的核心内容：主体是什么、情绪或氛围如何、是否包含文字。不要模板化的描述。", _recentUserCache.downloaded.base64, _recentUserCache.downloaded.mime);
-        if (answer && !isVagueDescription(answer)) {
-          imageDesc = answer;
-          log(`[user-image-cache] reused cached image phash=${_recentUserCache.phash}`);
-        }
-      }
 
-      const displayText = imageDesc
-        ? `${cleanText}（图片描述：${imageDesc.slice(0, 80)}）`
-        : /\[CQ:image/.test(rawMessage)
-          ? `${cleanText} [图片]`
-          : cleanText;
+      const displayText = /\[CQ:image/.test(rawMessage)
+        ? `${cleanText} [图片]`
+        : cleanText;
 
       const quickReply = await quickDecideSilence(
         contextText, senderName, displayText, scenarioKey, topicSummary, atmosphereTag, continuationHint,
