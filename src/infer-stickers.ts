@@ -57,13 +57,22 @@ export interface InferenceEntry {
 
 // ── 持久化 ──────────────────────────────────────────────
 
+let _inferencesDir = INFERENCES_DIR;
+
+/** 重设推理结果目录（供测试使用）。返回旧目录以便恢复。 */
+export function setInferencesDir(dir: string): string {
+  const old = _inferencesDir;
+  _inferencesDir = dir;
+  return old;
+}
+
 function ensureInferencesDir(): void {
-  if (!existsSync(INFERENCES_DIR)) mkdirSync(INFERENCES_DIR, { recursive: true });
+  if (!existsSync(_inferencesDir)) mkdirSync(_inferencesDir, { recursive: true });
 }
 
 /** 加载某会话已有的推理结果 msgId 集合 */
-function loadInferredIds(session: string): Set<number> {
-  const path = join(INFERENCES_DIR, `${session}.jsonl`);
+export function loadInferredIds(session: string): Set<number> {
+  const path = join(_inferencesDir, `${session}.jsonl`);
   if (!existsSync(path)) return new Set();
   const ids = new Set<number>();
   const lines = readFileSync(path, "utf8").trim().split("\n").filter(Boolean);
@@ -77,8 +86,8 @@ function loadInferredIds(session: string): Set<number> {
 }
 
 /** 追加一条推理结果到磁盘 */
-function saveInference(entry: InferenceEntry): void {
-  const path = join(INFERENCES_DIR, `${entry.session}.jsonl`);
+export function saveInference(entry: InferenceEntry): void {
+  const path = join(_inferencesDir, `${entry.session}.jsonl`);
   appendFileSync(path, JSON.stringify(entry) + "\n", "utf8");
 }
 
@@ -298,7 +307,7 @@ async function main(): Promise<void> {
   console.log(`  已跳过: ${skipped}`);
   console.log(`  成功: ${success}`);
   console.log(`  失败: ${fail}`);
-  console.log(`  输出: ${INFERENCES_DIR}/`);
+  console.log(`  输出: ${_inferencesDir}/`);
 }
 
 main().catch(console.error);
