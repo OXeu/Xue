@@ -17,6 +17,7 @@
  *   REPLY_CHANCE         回复概率 0-1，默认 0.3（仅非 @ 消息生效）
  *   BOT_QQ               Bot 自身 QQ 号（从 listen data 的 selfId 可知为 3042160393）
  *   DRY_RUN              默认为 true，仅模拟回复不上报发送，设为 false 时才实际发消息
+ *   VISION_MODEL         视觉模型名，默认 deepseek-v4-flash（与 LLM 共享 API Key）
  */
 
 import { readFileSync, existsSync, readdirSync } from "node:fs";
@@ -34,6 +35,7 @@ const BOT_QQ = Number(process.env.BOT_QQ || "3042160393");
 const REPLY_CHANCE = parseFloat(process.env.REPLY_CHANCE || "0.3");
 const DRY_RUN = process.env.DRY_RUN !== "false"; // 默认 true，仅模拟
 const MAX_CONTEXT = 30; // 加载最近 N 条消息作为上下文
+const VISION_MODEL = process.env.VISION_MODEL || "deepseek-v4-flash";
 
 const RAW_DIR = resolve(import.meta.dirname, "../data/raw");
 
@@ -141,6 +143,68 @@ function extractKeywords(entries: ListenEntry[], maxTerms: number): string[] {
     .sort((a, b) => b[1] - a[1])
     .slice(0, maxTerms)
     .map(([w]) => w);
+}
+
+// ── 图片理解 ────────────────────────────────────────────
+
+/** 从 CQ 码中提取第一个图片的 url（返回 null 表示无 url） */
+function parseFirstImageUrl(raw: string): string | null {
+  const m = raw.match(/\[CQ:image,([^\]]*)\]/);
+  if (!m) return null;
+  const urlMatch = m[1].match(/url=([^,]*)/);
+  return urlMatch ? decodeURIComponent(urlMatch[1]) : null;
+}
+
+/** 下载图片并 base64 编码 */
+async function downloadImage(url: string): Promise<{ base64: string; mime: string } | null> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return null;
+    const buf = await res.arrayBuffer();
+    const mime = res.headers.get("content-type") || "image/jpeg";
+    return { base64: Buffer.from(buf).toString("base64"), mime };
+  } catch {
+    return null;
+  }
+}
+
+/** 调用视觉 LLM 描述图片，返回一句话描述，失败返回 null */
+async function describeImage(cqMatch: string): Promise<string | null> {
+  const url = parseFirstImageUrl(cqMatch);
+  if (!url) return null;
+
+  const img = await downloadImage(url);
+  if (!img) return null;
+
+  const dataUri = `data:${img.mime};base64,${img.base64}`;
+
+  try {
+    const res = await fetch(`${LLM_BASE_URL.replace(/\/+$/, "")}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${LLM_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: VISION_MODEL,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "用一句话简短描述这张图片的内容" },
+            { type: "image_url", image_url: { url: dataUri } },
+          ],
+        }],
+        max_tokens: 100,
+        temperature: 0.5,
+      }),
+    });
+
+    if (!res.ok) return null;
+    const json = (await res.json()) as { choices: { message: { content: string } }[] };
+    return json.choices?.[0]?.message?.content?.trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 // ── 上下文 ──────────────────────────────────────────────
@@ -330,6 +394,15 @@ function connect(): void {
     const decision = decideReply(entry, msgType, rawMessage);
     if (!decision.should) return;
 
+    // 如果有图片，尝试获取描述
+    let imageDescription: string | null = null;
+    if (/\[CQ:image/.test(rawMessage)) {
+      imageDescription = await describeImage(rawMessage);
+      if (imageDescription) {
+        log(`img: ${imageDescription.slice(0, 120)}`);
+      }
+    }
+
     // 加载上下文 + 话题摘要
     const recent = loadRecentMessages(entry.session, MAX_CONTEXT);
     const contextText = buildContext(recent);
@@ -340,7 +413,9 @@ function connect(): void {
 
     // 决定角色定位（被 @ 了 vs 旁观者）
     let roleInstruction: string;
-    if (decision.reason === "at-self") {
+    if (imageDescription) {
+      roleInstruction = `【消息中包含一张图片，描述如下：${imageDescription}。回复时可以结合图片内容。】`;
+    } else if (decision.reason === "at-self") {
       roleInstruction = `【消息是发给你的，你被直接 @ 了，请以 ${BOT_NAME} 的身份回应。】`;
     } else if (decision.reason === "at-all") {
       roleInstruction = `【消息 @ 了全体成员，也包括你。请像普通群成员一样自然回应。】`;
@@ -349,7 +424,7 @@ function connect(): void {
     } else if (decision.reason === "bystander") {
       roleInstruction = `【这条消息不是发给你的。你只是群里的旁观者，如果实在想说点什么可以接一句，但不要抢话。】`;
     } else if (decision.reason === "media") {
-      roleInstruction = `【这是一个表情/图片消息。你可以简单评价一下，也可以忽略。】`;
+      roleInstruction = `【这是一个表情/图片消息。你看不到图片内容，不要假装看到了。根据上下文简单回一句即可。】`;
     } else {
       roleInstruction = `【你只是群里的普通成员，想回就回，不想回就不回。】`;
     }
