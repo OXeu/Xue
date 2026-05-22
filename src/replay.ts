@@ -454,6 +454,48 @@ function isVagueDescription(desc: string): boolean {
   return false;
 }
 
+/**
+ * 持久化最佳视觉描述到 inference 文件。
+ * 读取现有文件 → 过滤同 msgId 的旧 inference 行 → 追加新行 → 覆盖写回。
+ * 调用方负责先判断 isVagueDescription。
+ */
+function persistBestDescription(
+  dir: string,
+  session: string,
+  msgId: number,
+  phash: string,
+  desc: string,
+): void {
+  try {
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const filePath = join(dir, `${session}.jsonl`);
+    let lines: string[] = [];
+    if (existsSync(filePath)) {
+      lines = readFileSync(filePath, "utf8").trim().split("\n").filter(Boolean);
+    }
+    const filtered = lines.filter((line) => {
+      try {
+        const parsed = JSON.parse(line);
+        return parsed.msgId !== msgId || !parsed.inference;
+      } catch {
+        return true;
+      }
+    });
+    filtered.push(
+      JSON.stringify({
+        msgId,
+        session,
+        phash,
+        inference: desc,
+        timestamp: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(filePath, filtered.join("\n") + "\n", "utf8");
+  } catch {
+    // 静默失败，持久化不是关键路径
+  }
+}
+
 // ── LLM ────────────────────────────────────────────────
 
 async function callLlm(messages: { role: string; content: string }[]): Promise<string> {
@@ -675,25 +717,7 @@ async function main(): Promise<void> {
                   if (answer && !isVagueDescription(answer)) {
                     const inferredMsgId = _phashToMsgId.get(id);
                     if (inferredMsgId) {
-                      try {
-                        if (!existsSync(_inferencesDir)) mkdirSync(_inferencesDir, { recursive: true });
-                        const infPath = join(_inferencesDir, `${SESSION}.jsonl`);
-                        let lines: string[] = [];
-                        if (existsSync(infPath)) {
-                          lines = readFileSync(infPath, "utf8").trim().split("\n").filter(Boolean);
-                        }
-                        const filtered = lines.filter(line => {
-                          try {
-                            const parsed = JSON.parse(line);
-                            return parsed.msgId !== inferredMsgId || !parsed.inference;
-                          } catch { return true; }
-                        });
-                        filtered.push(JSON.stringify({
-                          msgId: inferredMsgId, session: SESSION, phash: id,
-                          inference: answer, timestamp: new Date().toISOString()
-                        }));
-                        writeFileSync(infPath, filtered.join("\n") + "\n", "utf8");
-                      } catch {}
+                      persistBestDescription(_inferencesDir, SESSION, inferredMsgId, id, answer);
                     }
                   }
                 } else {

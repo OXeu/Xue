@@ -8,7 +8,7 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
-import { existsSync, readFileSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, mkdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 // 设置环境变量后再动态导入，确保 callVision 能读取到
@@ -25,6 +25,7 @@ let buildContext: (entries: any[]) => string;
 let buildContextWithPhashIds: (entries: any[], phashMap: Map<number, string>) => string;
 let loadPhashMap: (session: string) => Map<number, string>;
 let computeDHash: (base64: string, mime: string) => Promise<string>;
+let persistBestDescription: (dir: string, session: string, msgId: number, phash: string, desc: string) => void;
 
 beforeAll(async () => {
   const mod = await import("../src/agent");
@@ -32,6 +33,7 @@ beforeAll(async () => {
   buildContext = mod.buildContext;
   buildContextWithPhashIds = mod.buildContextWithPhashIds;
   loadPhashMap = mod.loadPhashMap;
+  persistBestDescription = mod.persistBestDescription;
   // computeDHash is imported inside agent, we can re-import it directly
   const phashMod = await import("../src/phash");
   computeDHash = phashMod.computeDHash;
@@ -980,5 +982,148 @@ describe("loadPhashMap", () => {
     } finally {
       try { rmSync(filePath2, { force: true }); } catch { /* ok */ }
     }
+  });
+});
+
+// ── persistBestDescription ──────────────────────────────
+
+describe("persistBestDescription", () => {
+  let persistBestDescriptionFn: ReturnType<typeof Object>;
+  let isVagueDescriptionFn: (desc: string) => boolean;
+
+  let tmpDir = "";
+  const session = "unittest_persist";
+  const testDir = () => join(resolve(import.meta.dirname, "..", "data", "tmp-test-persist"));
+
+  beforeAll(async () => {
+    const mod = await import("../src/agent");
+    persistBestDescriptionFn = mod.persistBestDescription;
+    isVagueDescriptionFn = mod.isVagueDescription;
+  });
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(resolve(import.meta.dirname, "..", "data"), "tmp-persist-"));
+  });
+
+  afterEach(() => {
+    try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ok */ }
+  });
+
+  afterAll(() => {
+    try { rmSync(testDir(), { recursive: true, force: true }); } catch { /* ok */ }
+  });
+
+  test("文件不存在时创建文件并写入条目", () => {
+    (persistBestDescriptionFn as Function)(tmpDir, session, 101, "phash_101", "A white cat sitting on a windowsill");
+
+    const filePath = join(tmpDir, `${session}.jsonl`);
+    expect(existsSync(filePath)).toBe(true);
+    const lines = readFileSync(filePath, "utf8").trim().split("\n").filter(Boolean);
+    expect(lines).toHaveLength(1);
+    const parsed = JSON.parse(lines[0]);
+    expect(parsed.msgId).toBe(101);
+    expect(parsed.phash).toBe("phash_101");
+    expect(parsed.inference).toBe("A white cat sitting on a windowsill");
+    expect(parsed.session).toBe(session);
+  });
+
+  test("文件存在时追加不同 msgId 的条目", () => {
+    // 先写两条
+    (persistBestDescriptionFn as Function)(tmpDir, session, 201, "phash_201", "A black dog running in a park");
+    (persistBestDescriptionFn as Function)(tmpDir, session, 202, "phash_202", "A blue sky with clouds");
+
+    const filePath = join(tmpDir, `${session}.jsonl`);
+    const lines = readFileSync(filePath, "utf8").trim().split("\n").filter(Boolean);
+    expect(lines).toHaveLength(2);
+
+    const parsed0 = JSON.parse(lines[0]);
+    expect(parsed0.msgId).toBe(201);
+    expect(parsed0.inference).toBe("A black dog running in a park");
+
+    const parsed1 = JSON.parse(lines[1]);
+    expect(parsed1.msgId).toBe(202);
+    expect(parsed1.inference).toBe("A blue sky with clouds");
+  });
+
+  test("同 msgId 覆盖旧 inference，保留其他条目", () => {
+    // 先写两个不同 msgId 的条目
+    (persistBestDescriptionFn as Function)(tmpDir, session, 301, "phash_301", "An old description for msg 301");
+    (persistBestDescriptionFn as Function)(tmpDir, session, 302, "phash_302", "Another msg description");
+
+    // 覆盖 301 的 inference
+    (persistBestDescriptionFn as Function)(tmpDir, session, 301, "phash_301_new", "A better description for msg 301");
+
+    const filePath = join(tmpDir, `${session}.jsonl`);
+    const lines = readFileSync(filePath, "utf8").trim().split("\n").filter(Boolean);
+    expect(lines).toHaveLength(2);
+
+    // 排序并断言
+    const parsed = lines.map((l) => JSON.parse(l)).sort((a, b) => a.msgId - b.msgId);
+    expect(parsed[0].msgId).toBe(301);
+    expect(parsed[0].inference).toBe("A better description for msg 301");
+    expect(parsed[0].phash).toBe("phash_301_new");
+    expect(parsed[1].msgId).toBe(302);
+    expect(parsed[1].inference).toBe("Another msg description");
+  });
+
+  test("同 msgId 多次写入只保留最新一条（去重）", () => {
+    // 写入同一条 msgId 三次
+    (persistBestDescriptionFn as Function)(tmpDir, session, 401, "phash_401_v1", "First attempt");
+    (persistBestDescriptionFn as Function)(tmpDir, session, 401, "phash_401_v2", "Second attempt");
+    (persistBestDescriptionFn as Function)(tmpDir, session, 401, "phash_401_v3", "Third and best attempt");
+
+    const filePath = join(tmpDir, `${session}.jsonl`);
+    const lines = readFileSync(filePath, "utf8").trim().split("\n").filter(Boolean);
+    // 应只有一条
+    expect(lines).toHaveLength(1);
+    const parsed = JSON.parse(lines[0]);
+    expect(parsed.msgId).toBe(401);
+    expect(parsed.inference).toBe("Third and best attempt");
+    expect(parsed.phash).toBe("phash_401_v3");
+  });
+
+  test("空描述时仍写入（函数本身不过滤，调用方负责校验）", () => {
+    (persistBestDescriptionFn as Function)(tmpDir, session, 501, "phash_501", "");
+
+    const filePath = join(tmpDir, `${session}.jsonl`);
+    expect(existsSync(filePath)).toBe(true);
+    const lines = readFileSync(filePath, "utf8").trim().split("\n").filter(Boolean);
+    expect(lines).toHaveLength(1);
+    const parsed = JSON.parse(lines[0]);
+    expect(parsed.msgId).toBe(501);
+    expect(parsed.inference).toBe("");
+  });
+
+  test("调用方模式：描述为空时 prevented（不调用 persistBestDescription）", () => {
+    const filePath = join(tmpDir, `${session}.jsonl`);
+    // 模拟调用方 if-guard
+    const answer = "";
+    if (answer && !isVagueDescriptionFn(answer)) {
+      (persistBestDescriptionFn as Function)(tmpDir, session, 601, "phash_601", answer);
+    }
+    // 不应创建文件
+    expect(existsSync(filePath)).toBe(false);
+  });
+
+  test("调用方模式：描述模糊时 prevented（不调用 persistBestDescription）", async () => {
+    const filePath = join(tmpDir, `${session}.jsonl`);
+    // 先写入一个正常的条目建立文件
+    (persistBestDescriptionFn as Function)(tmpDir, session, 701, "phash_701", "A normal description of a cat");
+    const linesBefore = readFileSync(filePath, "utf8").trim().split("\n").filter(Boolean);
+    expect(linesBefore).toHaveLength(1);
+
+    // 动态导入 isVagueDescription
+    const { isVagueDescription: isVD } = await import("../src/agent");
+    // 模拟调用方 if-guard：模糊描述不应写入
+    const vagueAnswer = "The user is asking what is in this image without analyzing the question";
+    if (vagueAnswer && !isVD(vagueAnswer)) {
+      (persistBestDescriptionFn as Function)(tmpDir, session, 701, "phash_701_v2", vagueAnswer);
+    }
+
+    // 文件应保持原样
+    const linesAfter = readFileSync(filePath, "utf8").trim().split("\n").filter(Boolean);
+    expect(linesAfter).toHaveLength(1);
+    const parsed = JSON.parse(linesAfter[0]);
+    expect(parsed.inference).toBe("A normal description of a cat");
   });
 });
