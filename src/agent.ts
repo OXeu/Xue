@@ -569,4 +569,6 @@ function main(): void {
   process.on("SIGTERM", () => { log("shutting down"); process.exit(0); });
 }
 
-main();
+if (!process.env.RIN_TEST) {
+  main();
+}
