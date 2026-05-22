@@ -186,8 +186,8 @@ async function describeImage(cqMatch: string): Promise<string | null> {
   try {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
+      "Authorization": `Bearer ${LLM_API_KEY || "ollama"}`,
     };
-    if (LLM_API_KEY) headers["Authorization"] = `Bearer ${LLM_API_KEY}`;
 
     const res = await fetch(`${VISION_BASE_URL}/chat/completions`, {
       method: "POST",
@@ -207,8 +207,11 @@ async function describeImage(cqMatch: string): Promise<string | null> {
     });
 
     if (!res.ok) return null;
-    const json = (await res.json()) as { choices: { message: { content: string } }[] };
-    return json.choices?.[0]?.message?.content?.trim() || null;
+    const json = (await res.json()) as {
+      choices: { message: { content?: string; reasoning?: string } }[];
+    };
+    const msg = json.choices?.[0]?.message;
+    return msg?.reasoning?.trim() || msg?.content?.trim() || null;
   } catch {
     return null;
   }
