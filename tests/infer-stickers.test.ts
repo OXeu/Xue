@@ -662,4 +662,48 @@ describe("infer-stickers main flow integration", () => {
     expect(entries.some((e) => e.msgId === 96001)).toBeTrue();
     expect(entries.some((e) => e.msgId === 96002)).toBeTrue();
   });
+
+  test("pHash 同批次去重：相同图片的多条 sticker 只写入一条推理", async () => {
+    const session = "within_run_dedup";
+
+    // 生成一张图片，两次 sticker 都指向它
+    const img = await makePatternImage(42);
+
+    // 两条 sticker，不同的 msgId，不同的 URL，但 mock 返回同样的图片数据
+    createStickerIndex(session, [
+      {
+        msgId: 97001, time: 1716700000, session,
+        userId: 207001, nickname: "UserA", card: undefined,
+        type: "image", content: "https://multimedia.example.com/v1.jpg", text: "",
+      },
+      {
+        msgId: 97002, time: 1716700010, session,
+        userId: 207002, nickname: "UserB", card: undefined,
+        type: "image", content: "https://multimedia.example.com/v2.jpg", text: "",
+      },
+    ]);
+    createRawFile(session, [
+      { msgId: 97001, time: 1716700000, userId: 207001, nickname: "UserA", text: "" },
+      { msgId: 97002, time: 1716700010, userId: 207002, nickname: "UserB", text: "" },
+    ]);
+
+    // 同一个 mock（返回相同图片）处理两条
+    const origFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = makeMockFetch(img);
+      await processSession(session);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+
+    // 验证：只有 1 条推理结果
+    const infPath = join(inferencesDir, `${session}.jsonl`);
+    const lines = readFileSync(infPath, "utf8").trim().split("\n").filter(Boolean);
+    expect(lines.length).toBe(1);
+
+    const entry = JSON.parse(lines[0]) as InferenceEntry;
+    // 第一条先处理，应该被写入
+    expect(entry.msgId).toBe(97001);
+    // 第二条因为 phash 相同被跳过
+  });
 });
