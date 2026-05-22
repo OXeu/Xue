@@ -13,8 +13,9 @@
  *   DURATION_SECONDS     运行指定秒数后自动退出（不设则持续运行）
  */
 
-import { appendFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { saveCachedImage, hasCache } from "./image-cache";
 
 // ── 类型 ────────────────────────────────────────────────
 
@@ -190,6 +191,24 @@ function ts(): string {
   return new Date().toISOString();
 }
 
+// ── 图片缓存 ────────────────────────────────────────────
+
+/** 下载图片到本地缓存（不阻塞消息处理）。如果已缓存或下载失败，静默跳过。 */
+async function cacheEntryImage(url: string, session: string, msgId: number): Promise<void> {
+  if (hasCache(session, msgId)) return;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return;
+    const buf = await res.arrayBuffer();
+    const mime = res.headers.get("content-type") || "image/jpeg";
+    const base64 = Buffer.from(buf).toString("base64");
+    saveCachedImage(session, msgId, base64, mime, "", url);
+    console.log(`[${ts()}] [cache] cached image for ${session}_${msgId}`);
+  } catch {
+    // 下载失败不阻塞消息处理
+  }
+}
+
 // ── 连接与重连 ──────────────────────────────────────────
 
 let ws: WebSocket | null = null;
@@ -285,6 +304,13 @@ function connect(wsUrl: string, accessToken: string): void {
     );
 
     writeEntry(entry);
+
+    // 非阻塞缓存图片（成功后 infer-stickers 可直接用本地文件）
+    if (entry.imageUrls && entry.imageUrls.length > 0) {
+      for (const url of entry.imageUrls) {
+        cacheEntryImage(url, entry.session, entry.msgId);
+      }
+    }
   };
 
   ws.onclose = (event: CloseEvent) => {
