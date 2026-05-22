@@ -19,19 +19,31 @@ rin-research-humanize/
 │   ├── analyze-raw.ts            # 分析群聊监听 JSONL
 │   ├── style-transformer.ts      # 风格转换原型（6 条规则将 bot 回复真人化）
 │   ├── evaluate-transformer.ts   # 定量评估转换效果 vs 真人参考值
+│   ├── batch-transform.ts        # 批量转换产出人工审阅样本
 │   └── listen.ts                 # OneBot 纯监听客户端（只收不发）
+├── scripts/
+│   ├── start-listen.sh           # 启动监听器（写 PID、日志重定向）
+│   ├── stop-listen.sh            # 停止监听器
+│   ├── status-listen.sh          # 检查监听器状态与数据量
+│   └── ensure-listen.sh          # 保活脚本（crontab 用）
 ├── data/
-│   └── baseline/                 # 基线 JSONL（已采集 100 条）
+│   ├── baseline/                 # 基线 JSONL（已采集 100 条）
+│   └── raw/                      # 群聊监听数据（运行时生成，不提交）
 ├── docs/
 │   ├── research-plan.md          # 五个方向的研究计划（已用数据校准）
 │   ├── baseline-report.md        # 基线分析报告
 │   ├── style-report.md           # 深度风格分析报告
+│   ├── eval-transformer-*.md     # 风格转换器评估报告
+│   ├── transform-samples-*.md    # 人工审阅样本
 │   └── experiment-logs/          # 实地测试记录
+├── .env.example                  # 环境变量说明
 ├── package.json
 └── tsconfig.json
 ```
 
 ## 现在能做什么
+
+### 分析与研究
 
 | 命令 | 作用 |
 |------|------|
@@ -39,9 +51,18 @@ rin-research-humanize/
 | `bun run analyze-baseline` | 分析基线 JSONL，产出格式化的分析报告 |
 | `bun run analyze-style` | 深度风格分析（句长、标点、语气词、列表、格式化） |
 | `bun run analyze-raw` | 分析群聊监听 JSONL 数据 |
-| `bun run style-demo` | 运行风格转换器，展示 6 条规则的原文→改文对照 |
+| `bun run style-demo` | 运行风格转换器，展示原文→改文对照 |
 | `bun run eval-transformer` | 定量评估：转换后 vs 原文 vs 真人参考值对比 |
-| `bun run listen` | 启动 OneBot 纯监听客户端，采集群聊数据到 `data/raw/` |
+| `bun run batch-transform` | 批量转换，产出 15 条人工审阅样本 |
+
+### 数据采集
+
+| 命令 | 作用 |
+|------|------|
+| `bun run start` | 启动监听器（持久化，写 PID 文件） |
+| `bun run stop` | 停止监听器 |
+| `bun run status` | 检查监听器状态与数据量 |
+| `bun run listen` | 前台运行监听器（调试用） |
 
 ## 实验进展
 
