@@ -1,0 +1,11 @@
+{
+  "name": "rin-research-humanize",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Research on making LLM replies feel more human in QQ group chats",
+  "type": "module",
+  "scripts": {
+    "lint": "echo 'TODO'"
+  },
+  "devDependencies": {}
+}
