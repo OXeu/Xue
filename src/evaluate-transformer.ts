@@ -374,6 +374,7 @@ function main(): void {
     "4-列表消除": 0,
     "5-开头改写": 0,
     "6-短句穿插": 0,
+    "7-反问句尾": 0,
   };
 
   for (const body of bodies) {
