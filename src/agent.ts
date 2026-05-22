@@ -16,6 +16,7 @@
  *   BOT_NAME             机器人名称，默认 Rin
  *   REPLY_CHANCE         回复概率 0-1，默认 0.3（仅非 @ 消息生效）
  *   BOT_QQ               Bot 自身 QQ 号（从 listen data 的 selfId 可知为 3042160393）
+ *   DRY_RUN              默认为 true，仅模拟回复不上报发送，设为 false 时才实际发消息
  */
 
 import { readFileSync, existsSync, readdirSync } from "node:fs";
@@ -31,6 +32,7 @@ const ACCESS_TOKEN = process.env.ONEBOT_ACCESS_TOKEN || "";
 const BOT_NAME = process.env.BOT_NAME || "Rin";
 const BOT_QQ = Number(process.env.BOT_QQ || "3042160393");
 const REPLY_CHANCE = parseFloat(process.env.REPLY_CHANCE || "0.3");
+const DRY_RUN = process.env.DRY_RUN !== "false"; // 默认 true，仅模拟
 const MAX_CONTEXT = 30; // 加载最近 N 条消息作为上下文
 
 const RAW_DIR = resolve(import.meta.dirname, "../data/raw");
@@ -241,8 +243,12 @@ function connect(): void {
       ]);
 
       if (reply) {
-        sendGroupMsg(ws!, groupId, reply);
-        log(`replied: ${reply.slice(0, 100)}`);
+        if (DRY_RUN) {
+          log(`[dry-run] would reply to ${entry.session}: ${reply.slice(0, 200)}`);
+        } else {
+          sendGroupMsg(ws!, groupId, reply);
+          log(`replied: ${reply.slice(0, 100)}`);
+        }
       } else {
         log("LLM returned empty, skipped");
       }
@@ -273,6 +279,8 @@ function main(): void {
     const files = readdirSync(RAW_DIR).filter((f) => f.endsWith(".jsonl"));
     log(`data/raw 中有 ${files.length} 个会话文件`);
   }
+
+  log(`dry-run=${DRY_RUN}（${DRY_RUN ? "仅模拟，不会实际发送消息" : "会实际发送消息到群聊"}）`);
 
   connect();
 
