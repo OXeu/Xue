@@ -171,3 +171,102 @@ describe("agent.ts 中同一函数的一致性", () => {
     expect(replayResult).toBe(agentResult);
   });
 });
+
+// ── replay.ts 的 displayText 构造（低确定性风格的（图片描述：...））────
+
+describe("replay.ts 下载失败 displayText 构造", () => {
+  const testSession = "unittest_replay_displaytext";
+  const testFilePath = join(INFERENCES_DIR, `${testSession}.jsonl`);
+
+  afterAll(() => {
+    try { unlinkSync(testFilePath); } catch { /* ok */ }
+  });
+
+  test("有缓存时 displayText 包含 （图片描述：...）", () => {
+    const desc = "A white cat sleeping on a red sofa, relaxed atmosphere, no text.";
+    const msgId = 2001;
+    if (!existsSync(INFERENCES_DIR)) mkdirSync(INFERENCES_DIR, { recursive: true });
+    writeFileSync(testFilePath, JSON.stringify({ msgId, session: testSession, inference: desc }) + "\n", "utf8");
+
+    // 模拟 replay.ts 的精确分支逻辑（行 ~733-765）：
+    let imageDesc = "";
+    if (!imageDesc) {
+      const cached = loadCachedInference(testSession, msgId);
+      if (cached) imageDesc = cached;
+    }
+    expect(imageDesc).toBe(desc);
+
+    const cleanText = "";
+    const displayText = imageDesc
+      ? `${cleanText}（图片描述：${imageDesc.slice(0, 80)}）`
+      : cleanText;
+
+    // replay.ts 使用圆括号格式（低确定性沉默检查路径）
+    expect(displayText).toContain("（图片描述：A white cat sleeping on a red sofa, relaxed atmosphere, no text.）");
+    // 不应出现高确定性的方括号格式
+    expect(displayText).not.toContain("[图片描述:");
+  });
+
+  test("图片有文字内容时 displayText 含文字描述", () => {
+    const desc = "A screenshot showing system update progress bar at 45% with text 'Update in progress'. Dark theme.";
+    const msgId = 2002;
+    writeFileSync(testFilePath, JSON.stringify({ msgId, session: testSession, inference: desc }) + "\n", "utf8");
+
+    let imageDesc = "";
+    if (!imageDesc) {
+      const cached = loadCachedInference(testSession, msgId);
+      if (cached) imageDesc = cached;
+    }
+    expect(imageDesc).toBe(desc);
+
+    const cleanText = "看这个";
+    const displayText = imageDesc
+      ? `${cleanText}（图片描述：${imageDesc.slice(0, 80)}）`
+      : cleanText;
+
+    // 文本前缀 + 圆括号描述
+    expect(displayText).toBe("看这个（图片描述：A screenshot showing system update progress bar at 45% with text 'Update in prog）");
+  });
+
+  test("无缓存时 displayText 退化为纯 cleanText", () => {
+    // 清理文件
+    try { unlinkSync(testFilePath); } catch { /* ok */ }
+
+    let imageDesc = "";
+    if (!imageDesc) {
+      const cached = loadCachedInference(testSession, 9999);
+      if (cached) imageDesc = cached;
+    }
+    expect(imageDesc).toBe("");
+
+    const cleanText = "看看这个";
+    const displayText = imageDesc
+      ? `${cleanText}（图片描述：${imageDesc.slice(0, 80)}）`
+      : cleanText;
+
+    expect(displayText).toBe("看看这个");
+    expect(displayText).not.toContain("（图片描述：");
+  });
+
+  test("描述截断到 80 字符", () => {
+    const longDesc = "B".repeat(200);
+    const msgId = 2003;
+    writeFileSync(testFilePath, JSON.stringify({ msgId, session: testSession, inference: longDesc }) + "\n", "utf8");
+
+    let imageDesc = "";
+    if (!imageDesc) {
+      const cached = loadCachedInference(testSession, msgId);
+      if (cached) imageDesc = cached;
+    }
+    expect(imageDesc).toBe(longDesc);
+
+    const cleanText = "";
+    const displayText = imageDesc
+      ? `${cleanText}（图片描述：${imageDesc.slice(0, 80)}）`
+      : cleanText;
+
+    // 截断：80 个 B + 外壳"（图片描述：……）"
+    expect(displayText).toBe(`（图片描述：${"B".repeat(80)}）`);
+    expect(displayText.length).toBe(80 + 7); // 7 = "（图片描述：".length + "）".length
+  });
+});
