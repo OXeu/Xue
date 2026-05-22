@@ -153,6 +153,34 @@ function buildContext(entries: ListenEntry[]): string {
     .join("\n");
 }
 
+/** 从 data/groups.json 加载群聊画像。 */
+interface GroupProfile {
+  name: string;
+  description: string;
+}
+
+let groupsCache: Record<string, GroupProfile> | null = null;
+
+function loadGroups(): Record<string, GroupProfile> {
+  if (groupsCache) return groupsCache;
+  const path = resolve(import.meta.dirname, "../data/groups.json");
+  try {
+    groupsCache = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    groupsCache = {};
+  }
+  return groupsCache!;
+}
+
+/** 为已知群生成一段群描述。未知群返回空。 */
+function getGroupContext(sessionId: string): string {
+  const groups = loadGroups();
+  const profile = groups[sessionId];
+  if (!profile || !profile.description) return "";
+  const namePart = profile.name ? `「${profile.name}」` : "";
+  return `你在${namePart}群里，${profile.description}`;
+}
+
 function ts(): string {
   return new Date().toISOString();
 }
@@ -401,6 +429,7 @@ async function main(): Promise<void> {
             content: [
               getSystemPrompt(BOT_NAME),
               getReplyRules(),
+              getGroupContext(SESSION),
               topicSummary,
               `\n下面是这个群最近的消息：`,
               roleInst,
