@@ -64,28 +64,21 @@ import {
   buildSessionProfile,
 } from "./chat-utils";
 
-function buildContext(entries: ListenEntry[], phashMap?: Map<number, string>): string {
-  const ph = phashMap ?? new Map();
+function buildContext(entries: ListenEntry[]): string {
   if (entries.length === 0) return "（暂无历史消息）";
-  return entries.map((e) => {
-    const name = e.card || e.nickname;
-    const time = new Date(e.time * 1000).toLocaleTimeString("zh-CN", {
-      hour: "2-digit", minute: "2-digit",
-    });
-    const at = e.atUsers.length > 0 ? ` @${e.atUsers.join(",")}` : "";
-    const reply = e.replyTo ? ` (回复 ${e.replyTo})` : "";
-    const text = e.text || `[${e.type}]`;
-    let imgMark = "";
-    if (e.segmentTypes?.includes("image")) {
-      const phash = ph.get(e.msgId);
-      if (phash) {
-        imgMark = ` [图片 #${phash}]`;
-      } else {
-        imgMark = " [图片]";
-      }
-    }
-    return `[${time}] ${name}${at}${reply}: ${text}${imgMark}`;
-  }).join("\n");
+  return entries
+    .map((e) => {
+      const name = e.card || e.nickname;
+      const time = new Date(e.time * 1000).toLocaleTimeString("zh-CN", {
+        hour: "2-digit", minute: "2-digit",
+      });
+      const at = e.atUsers.length > 0 ? ` @${e.atUsers.join(",")}` : "";
+      const reply = e.replyTo ? ` (回复 ${e.replyTo})` : "";
+      const text = e.text || `[${e.type}]`;
+      const imgMark = e.segmentTypes?.includes("image") ? " [图片]" : "";
+      return `[${time}] ${name}${at}${reply}: ${text}${imgMark}`;
+    })
+    .join("\n");
 }
 
 function decideReply(entry: ListenEntry, rawText: string, msgType: string): ReplyDecision {

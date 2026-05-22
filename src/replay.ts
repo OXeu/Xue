@@ -3,7 +3,7 @@
  *
  * 不连接 OneBot。从 JSONL 读取旧消息，按时间顺序逐条回放。
  * 图片消息处理采用 tool calling 模式（与 agent.ts 一致）：
- *   收到图片 → 计算 pHash → 在上下文中显示 [图片 #phash_xxx]
+ *   收到图片 → 计算 pHash → 在上下文中显示 [图片] 标记
  *   → Agent 通过工具调用（describe_image）询问图片内容
  *   → 系统执行工具调用视觉模型 → 工具结果注入对话 → Agent 可继续追问或直接回复
  *   （每消息最多 5 轮问答）
@@ -64,11 +64,11 @@ const DESCRIBE_IMAGE_TOOL = {
   type: "function" as const,
   function: {
     name: "describe_image",
-    description: "询问某张图片的内容。图片在上下文中以 [图片 #phash_xxx] 形式出现，用 phash 作为 id 引用它。",
+    description: "询问某张图片的内容。图片 ID（pHash）在消息头中以 #phash_xxx 形式标注。",
     parameters: {
       type: "object",
       properties: {
-        id: { type: "string", description: "图片的 phash ID（来自上下文中的 [图片 #phash_xxx]）" },
+        id: { type: "string", description: "图片的 pHash ID（来自消息头中的 #phash_xxx）" },
         question: { type: "string", description: "你想问这张图片的具体问题" },
       },
       required: ["id", "question"],

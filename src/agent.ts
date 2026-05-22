@@ -5,7 +5,7 @@
  * 与 listen.ts 互不干扰（各自使用独立的 WS 连接）。
  *
  * 图片消息处理流程（视觉问答循环）：
- *   收到图片 → 计算 pHash → 保存在上下文中显示 [图片 #phash_xxx]
+ *   收到图片 → 计算 pHash → 在上下文中显示 [图片] 标记
  *   → Agent 通过工具调用（describe_image）询问图片内容
  *   → 系统执行工具调用视觉模型 → 工具结果注入对话 → Agent 可继续追问或直接回复
  *   （每消息最多 5 轮问答）
@@ -85,13 +85,13 @@ const DESCRIBE_IMAGE_TOOL = {
   function: {
     name: "describe_image",
     description:
-      "询问某张图片的内容。图片在上下文中以 [图片 #phash_xxx] 形式出现，用 phash 作为 id 引用它。",
+      "询问某张图片的内容。图片 ID（pHash）在消息头中以 #phash_xxx 形式标注。",
     parameters: {
       type: "object",
       properties: {
         id: {
           type: "string",
-          description: "图片的 phash ID（来自上下文中的 [图片 #phash_xxx]）",
+          description: "图片的 pHash ID（来自消息头中的 #phash_xxx）",
         },
         question: {
           type: "string",
