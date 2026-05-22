@@ -5,6 +5,7 @@
   "description": "Research on making LLM replies feel more human in QQ group chats",
   "type": "module",
   "scripts": {
+    "collect-baseline": "bun src/collect-baseline.ts",
     "lint": "echo 'TODO'"
   },
   "devDependencies": {}
