@@ -57,10 +57,28 @@ Step 3 describeImage      ✅
 | auth header 缺失（Ollama 需要 Bearer token） | 始终发送 `Bearer ${LLM_API_KEY \|\| "ollama"}` | `281ff6e` |
 | gemma4 是推理模型，content 为空 | 从 `reasoning` 字段提取描述 | `281ff6e` |
 | VISION_MODEL 默认值为误导的 deepseek-v4-flash | 改为空（禁用），显式配置后才启用 | `fc6a570` |
+| reasoning 含 "Input:"、"Task:"、"Subject:" 标签污染 | `cleanVisionDescription()` 提取纯描述，去标签，过滤泛泛描述 | `HEAD` |
+
+## 描述清洗效果
+
+引入 `cleanVisionDescription(raw)` 后的实际测试结果：
+
+```
+Index 49 — 原始: * Input: An image showing a mountainous landscape...
+           清洗后: Mountains, clouds/mist, prayer flags, trees.
+
+Index 50 — 原始: * Input image: A landscape photo showing mountains/cliffs...
+           清洗后: Mountains, specifically a large rock formation (Half Dome style).
+
+Index 56 — 原始: * Input: An image showing a white bowl containing...
+           清洗后: A white bowl.
+```
+
+注入 prompt 时不再出现 "Input:"、"Task:"、"Subject:" 等指令文本。
 
 ## 当前 agent 状态
 
-- **PID**: 1419967
+- **PID**: 1423307
 - **启动日志**: `vision: gemma4:26b @ http://127.0.0.1:11444/v1`
 - **dry-run**: 自重启后无新消息流入，尚未产生带图片描述的 dry-run 回复
 
