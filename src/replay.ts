@@ -28,7 +28,6 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join, resolve } from "node:path";
 import { computeDHash } from "./phash";
 import { cleanVisionDescription } from "./clean-vision";
-import { getCachedDescription, saveCachedImage } from "./image-cache";
 import {
   getSystemPrompt,
   getScenarioPrompt,

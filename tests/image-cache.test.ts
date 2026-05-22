@@ -1,162 +1,153 @@
 /**
- * image-cache.test.ts — image-cache 单元测试
+ * tests/image-cache.test.ts — image-cache.ts 单元测试（phash 去重）
  *
- * runner: bun:test
- * 不调网络/视觉模型，只测文件 IO 和缓存逻辑。
- * 测试在临时目录中运行，完成后清理。
+ * 覆盖：保存、读取、缺失、损坏等边界。使用临时目录。
  */
 
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import {
-  setCacheDir,
-  saveCachedImage,
-  getCachedDescription,
-  getCachedImage,
-  hasCache,
-  cacheKey,
-} from "../src/image-cache";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-const TMP_DIR = resolve(import.meta.dirname, "../.test-cache-" + Date.now());
-let oldCacheDir: string;
+import {
+  saveCachedImage,
+  getCachedImage,
+  hasCache,
+  setCacheDir,
+} from "../src/image-cache";
 
-beforeAll(() => {
-  // 切换到临时目录，存下旧路径以便后续恢复
-  oldCacheDir = setCacheDir(TMP_DIR);
+let TMP_DIR = "";
+
+beforeEach(() => {
+  TMP_DIR = mkdtempSync(join(resolve(import.meta.dirname, ".."), ".test-imgcache-"));
+  setCacheDir(TMP_DIR);
 });
 
-afterAll(() => {
-  // 恢复旧目录，清理临时文件
-  setCacheDir(oldCacheDir);
+afterEach(() => {
   try { rmSync(TMP_DIR, { recursive: true, force: true }); } catch {}
 });
 
-describe("image-cache", () => {
-  // ── 基础读写 ──
+const TEST_PHASH = "aabbccdd00112233";
 
-  test("save + getCachedDescription 完整来回", () => {
-    const session = "test_session";
-    const msgId = 10001;
-    const desc = "A red apple on a wooden table.";
-    const mime = "image/jpeg";
-    const b64 = Buffer.from("fake-jpeg-data").toString("base64");
-
-    saveCachedImage(session, msgId, b64, mime, desc);
-
-    const got = getCachedDescription(session, msgId);
-    expect(got).toBe(desc);
-  });
-
-  test("getCachedImage 返回正确的 base64 和 mime", () => {
-    const session = "test_session";
-    const msgId = 10001; // 复用上一用例写入的文件
-    const result = getCachedImage(session, msgId);
-
-    expect(result).not.toBeNull();
-    expect(result!.mime).toBe("image/jpeg");
-    expect(result!.base64).toBe(Buffer.from("fake-jpeg-data").toString("base64"));
-  });
-
-  test("save 时记录 sourceUrl", () => {
-    const session = "test_url";
-    const msgId = 20001;
-    const desc = "Mountains at sunset.";
+describe("image-cache (phash-based)", () => {
+  test("save + getCachedImage 完整来回", () => {
+    const b64 = Buffer.from("fake-image-bytes").toString("base64");
     const mime = "image/png";
-    const b64 = Buffer.from("png-data").toString("base64");
-    const url = "https://example.com/photo.png";
 
-    saveCachedImage(session, msgId, b64, mime, desc, url);
+    saveCachedImage(TEST_PHASH, b64, mime);
 
-    const jsonPath = join(TMP_DIR, `${cacheKey(session, msgId)}.json`);
-    const meta = JSON.parse(require("fs").readFileSync(jsonPath, "utf8"));
-    expect(meta.sourceUrl).toBe(url);
-    expect(meta.description).toBe(desc);
-    expect(meta.mime).toBe("image/png");
+    const got = getCachedImage(TEST_PHASH);
+    expect(got).not.toBeNull();
+    expect(got!.base64).toBe(b64);
+    expect(got!.mime).toBe(mime);
   });
 
-  // ── 缓存不存在 ──
+  test("保存后文件以 phash 命名", () => {
+    const b64 = Buffer.from("test-data").toString("base64");
+    saveCachedImage(TEST_PHASH, b64, "image/jpeg");
 
-  test("getCachedDescription 缓存不存在 → null", () => {
-    expect(getCachedDescription("ghost", 99999)).toBeNull();
+    // 验证 .jpeg 和 .meta 文件存在
+    expect(existsSync(join(TMP_DIR, `${TEST_PHASH}.jpeg`))).toBeTrue();
+    expect(existsSync(join(TMP_DIR, `${TEST_PHASH}.meta`))).toBeTrue();
+
+    // 验证 meta 内容
+    const meta = JSON.parse(readFileSync(join(TMP_DIR, `${TEST_PHASH}.meta`), "utf8"));
+    expect(meta.mime).toBe("image/jpeg");
   });
 
   test("getCachedImage 缓存不存在 → null", () => {
-    expect(getCachedImage("ghost", 99999)).toBeNull();
+    expect(getCachedImage("nonexistent")).toBeNull();
   });
 
   test("hasCache 返回 false 当缓存不存在", () => {
-    expect(hasCache("ghost", 99999)).toBeFalse();
+    expect(hasCache("ghost")).toBeFalse();
   });
 
   test("hasCache 返回 true 当缓存存在", () => {
-    expect(hasCache("test_session", 10001)).toBeTrue();
+    saveCachedImage(TEST_PHASH, Buffer.from("x").toString("base64"), "image/png");
+    expect(hasCache(TEST_PHASH)).toBeTrue();
   });
 
-  // ── 文件损坏 / 异常 ──
-
-  test("JSON 文件损坏（非 JSON）→ 返回 null", () => {
-    const key = cacheKey("corrupt", 30001);
-    const jsonPath = join(TMP_DIR, `${key}.json`);
-    writeFileSync(jsonPath, "这不是有效 json", "utf8");
-
-    expect(getCachedDescription("corrupt", 30001)).toBeNull();
-    expect(getCachedImage("corrupt", 30001)).toBeNull();
+  test("不同 mime 类型: image/gif", () => {
+    const b64 = Buffer.from("fake-gif").toString("base64");
+    saveCachedImage("gif001", b64, "image/gif");
+    const got = getCachedImage("gif001");
+    expect(got).not.toBeNull();
+    expect(got!.mime).toBe("image/gif");
+    expect(existsSync(join(TMP_DIR, "gif001.gif"))).toBeTrue();
   });
 
-  test("JSON 存在但图片文件缺失 → getCachedImage 返回 null", () => {
-    const session = "missing_img";
-    const msgId = 40001;
-    const jsonPath = join(TMP_DIR, `${cacheKey(session, msgId)}.json`);
-    writeFileSync(
-      jsonPath,
-      JSON.stringify({ description: "desc", mime: "image/jpeg" }),
-      "utf8",
-    );
-
-    // 描述可读（JSON 有效）
-    expect(getCachedDescription(session, msgId)).toBe("desc");
-    // 图片文件不存在 → null
-    expect(getCachedImage(session, msgId)).toBeNull();
+  test("不同 mime 类型: image/webp", () => {
+    const b64 = Buffer.from("fake-webp").toString("base64");
+    saveCachedImage("webp001", b64, "image/webp");
+    const got = getCachedImage("webp001");
+    expect(got).not.toBeNull();
+    expect(got!.mime).toBe("image/webp");
+    expect(existsSync(join(TMP_DIR, "webp001.webp"))).toBeTrue();
   });
 
-  test("JSON 中 description 字段为空字符串 → 返回 null", () => {
-    const session = "empty_desc";
-    const msgId = 50001;
-    const jsonPath = join(TMP_DIR, `${cacheKey(session, msgId)}.json`);
-    writeFileSync(
-      jsonPath,
-      JSON.stringify({ description: "", mime: "image/jpeg" }),
-      "utf8",
-    );
+  test("重复保存相同 phash → 不覆盖（去重）", () => {
+    const origB64 = Buffer.from("original").toString("base64");
+    saveCachedImage(TEST_PHASH, origB64, "image/png");
 
-    expect(getCachedDescription(session, msgId)).toBeNull();
+    // 再次保存相同 phash（不同数据，同 mime）
+    const newB64 = Buffer.from("different").toString("base64");
+    saveCachedImage(TEST_PHASH, newB64, "image/png");
+
+    // 应保留原数据（去重，不覆盖）
+    const got = getCachedImage(TEST_PHASH);
+    expect(got!.base64).toBe(origB64);
+    expect(got!.mime).toBe("image/png");
   });
 
-  // ── 自动创建目录 ──
+  test("空 phash 静默跳过不创建文件", async () => {
+    saveCachedImage("", Buffer.from("x").toString("base64"), "image/png");
+    const { readdirSync } = await import("node:fs");
+    const files = readdirSync(TMP_DIR);
+    expect(files.length).toBe(0);
+  });
 
-  test("写入时自动创建缓存目录", () => {
-    const nestedDir = join(TMP_DIR, "../.test-cache-nested-" + Date.now());
-    // 确保目录不存在
-    try { rmSync(nestedDir, { recursive: true, force: true }); } catch {}
-    expect(existsSync(nestedDir)).toBeFalse();
+  test("meta 文件损坏时回退到 ext 推断 mime", async () => {
+    const b64 = Buffer.from("test-data").toString("base64");
+    saveCachedImage(TEST_PHASH, b64, "image/jpeg");
 
-    const oldDir = setCacheDir(nestedDir);
+    // 破坏 meta 文件
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(join(TMP_DIR, `${TEST_PHASH}.meta`), "not-json{", "utf8");
+
+    // 应仍能从 ext 推断 mime
+    const got = getCachedImage(TEST_PHASH);
+    expect(got).not.toBeNull();
+    expect(got!.mime).toBe("image/jpeg");
+    expect(got!.base64).toBe(b64);
+  });
+
+  test("图片文件存在但 meta 缺失 → 回退到 ext 推断", () => {
+    const b64 = Buffer.from("no-meta-data").toString("base64");
+    saveCachedImage(TEST_PHASH, b64, "image/png");
+    // 删除 meta
+    rmSync(join(TMP_DIR, `${TEST_PHASH}.meta`));
+
+    // 应仍能从 .png 文件读取并推断 mime
+    const got = getCachedImage(TEST_PHASH);
+    expect(got).not.toBeNull();
+    expect(got!.mime).toBe("image/png");
+    expect(got!.base64).toBe(b64);
+  });
+
+  test("setCacheDir 重置后读写新目录", () => {
+    const tmp2 = mkdtempSync(join(resolve(import.meta.dirname, ".."), ".test-imgcache2-"));
     try {
-      saveCachedImage("auto", 60001, "AAAA", "image/png", "auto-created dir");
-      expect(existsSync(nestedDir)).toBeTrue();
-      expect(getCachedDescription("auto", 60001)).toBe("auto-created dir");
+      const old = setCacheDir(tmp2);
+      expect(old).toBe(TMP_DIR);
+
+      const b64 = Buffer.from("new-dir").toString("base64");
+      saveCachedImage("newdir001", b64, "image/jpeg");
+
+      expect(getCachedImage("newdir001")).not.toBeNull();
+      // 原目录不应有该文件
+      expect(existsSync(join(TMP_DIR, "newdir001.jpeg"))).toBeFalse();
     } finally {
-      setCacheDir(oldDir);
-      try { rmSync(nestedDir, { recursive: true, force: true }); } catch {}
+      try { rmSync(tmp2, { recursive: true, force: true }); } catch {}
     }
-  });
-
-  // ── cacheKey ──
-
-  test("cacheKey 格式正确", () => {
-    expect(cacheKey("group_123", 456)).toBe("group_123_456");
-    expect(cacheKey("private_1", 0)).toBe("private_1_0");
-    expect(cacheKey("test", 999999999)).toBe("test_999999999");
   });
 });

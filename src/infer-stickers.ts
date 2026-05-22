@@ -21,7 +21,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from
 import { join, resolve } from "node:path";
 import { getStickerContext, StickerEntry } from "./index-stickers";
 import { cleanVisionDescription } from "./clean-vision";
-import { hasCache, getCachedImage, saveCachedImage } from "./image-cache";
+import { hasCache, saveCachedImage } from "./image-cache";
 import { computeDHash, isDuplicate } from "./phash";
 
 const STICKERS_DIR = resolve(import.meta.dirname, "../data/prod/stickers");
@@ -130,32 +130,29 @@ let cdnSkipped = 0;
 
 // ── 图片获取 ────────────────────────────────────────────
 
-/** 获取图片 base64：优先使用本地缓存，无缓存时从 URL 即时下载。
+/** 获取图片 base64：优先使用本地缓存（按 phash），无缓存时从 URL 即时下载。
  *  CDN 链接有时效，若本地无缓存且下载失败则返回 null（表明图片已不可用）。 */
 async function getImageBase64(
   imageUrl: string, session: string, msgId: number,
-): Promise<{ base64: string; mime: string } | null> {
-  // 1) 优先本地缓存
-  if (hasCache(session, msgId)) {
-    const cached = getCachedImage(session, msgId);
-    if (cached) {
-      console.log(`    [cache hit] ${session}_${msgId}`);
-      return cached;
-    }
-  }
-
-  // 2) 从原始 URL 下载（listen 阶段已检查过的 CDN 链接在此时间窗口内应仍有效）
+): Promise<{ base64: string; mime: string; phash: string } | null> {
+  // 1) 从原始 URL 下载
   try {
     const res = await fetch(imageUrl, { signal: AbortSignal.timeout(8_000) });
     if (res.ok) {
       const buf = await res.arrayBuffer();
       const mime = res.headers.get("content-type") || "image/jpeg";
       const base64 = Buffer.from(buf).toString("base64");
-      saveCachedImage(session, msgId, base64, mime, "(pending)", imageUrl);
-      console.log(`    [downloaded + cached] ${session}_${msgId}`);
-      return { base64, mime };
+      const phash = await computeDHash(base64, mime);
+      // 检查是否已有相同 phash 的缓存（去重）
+      if (!hasCache(phash)) {
+        saveCachedImage(phash, base64, mime);
+        console.log(`    [downloaded + cached] phash=${phash}`);
+      } else {
+        console.log(`    [downloaded + dedup] phash=${phash} (already cached)`);
+      }
+      return { base64, mime, phash };
     }
-  } catch { /* no picsum fallback — 随机风景图对群聊含义是误导性的 */ }
+  } catch { /* 下载失败 */ }
 
   return null;
 }
@@ -291,14 +288,8 @@ export async function processSession(
       continue;
     }
 
-    // 计算感知哈希，与已有结果去重
-    let phash: string | undefined;
-    try {
-      phash = await computeDHash(img.base64, img.mime);
-    } catch {
-      // 哈希计算失败（如图片损坏），仍继续推理
-    }
-
+    // 使用已计算的 phash，与已有结果去重
+    const phash = img.phash;
     if (phash && isDuplicate(phash, knownPhashes)) {
       console.log(`  ⏭ 跳过（与已有图片相似，phash 距离 ≤ 3）`);
       dedupSkipped++;
@@ -383,4 +374,7 @@ async function main(): Promise<void> {
   console.log(`  输出: ${_inferencesDir}/`);
 }
 
-main().catch(console.error);
+const isDirectRun = import.meta.path === Bun.main;
+if (isDirectRun) {
+  main().catch(console.error);
+}

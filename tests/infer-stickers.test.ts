@@ -272,16 +272,21 @@ describe("infer-stickers main flow integration", () => {
     try { rmSync(TMP_ROOT, { recursive: true, force: true }); } catch {}
   });
 
-  beforeEach(() => {
-    // 重置 mock fetch
-    let callCount = 0;
+  beforeEach(async () => {
+    // 生成一张有效的小图片（sharp 能处理），每次调用生成不同内容
+    const { default: sharp } = await import("sharp");
+
+    // 用计数器使每次 mock fetch 返回不同的图片数据
+    let imgCallCount = 0;
+    let visionCallCount = 0;
+
     globalThis.fetch = ((url: string | URL | Request, ...args: any[]): Promise<Response> => {
       const urlStr = typeof url === "string" ? url : url.toString();
 
-      // 视觉模型 API 请求优先匹配
+      // 视觉模型 API 请求
       if (urlStr.includes("/v1/chat/completions")) {
-        callCount++;
-        const responseText = callCount === 1
+        visionCallCount++;
+        const responseText = visionCallCount === 1
           ? "A funny reaction meme expressing amusement."
           : "A shocked surprised face meme.";
         return Promise.resolve(new Response(JSON.stringify({
@@ -292,12 +297,29 @@ describe("infer-stickers main flow integration", () => {
         }));
       }
 
-      // 图片下载（CDN URL）→ 模拟图片数据
-      const fakeImageBytes = Buffer.from("fake-jpeg-data");
-      return Promise.resolve(new Response(fakeImageBytes, {
-        status: 200,
-        headers: { "content-type": "image/jpeg" },
-      }));
+      // 图片下载 → 每次生成不同内容，确保 phash 不同
+      imgCallCount++;
+      const r = (imgCallCount * 50 + 30) % 256;
+      const g = (imgCallCount * 80 + 60) % 256;
+      const b = (imgCallCount * 120 + 90) % 256;
+
+      // 生成 16×16 的渐变图确保 dHash 有可比较的差异
+      const raw = Buffer.alloc(16 * 16 * 3);
+      for (let y = 0; y < 16; y++) {
+        for (let x = 0; x < 16; x++) {
+          const idx = (y * 16 + x) * 3;
+          raw[idx] = (r + x * 10) % 256;
+          raw[idx + 1] = (g + y * 8) % 256;
+          raw[idx + 2] = (b + x * 5 + y * 7) % 256;
+        }
+      }
+      return sharp(raw, { raw: { width: 16, height: 16, channels: 3 } })
+        .jpeg()
+        .toBuffer()
+        .then((buf: Buffer) => new Response(buf, {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        }));
     }) as typeof globalThis.fetch;
   });
 

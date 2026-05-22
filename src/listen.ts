@@ -15,7 +15,8 @@
 
 import { appendFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { saveCachedImage, hasCache } from "./image-cache";
+import { saveCachedImage } from "./image-cache";
+import { computeDHash } from "./phash";
 
 // ── 类型 ────────────────────────────────────────────────
 
@@ -193,18 +194,19 @@ function ts(): string {
 
 // ── 图片缓存 ────────────────────────────────────────────
 
-/** 下载图片到本地缓存（不阻塞消息处理）。如果已缓存或下载失败，静默跳过。
+/** 下载图片到本地缓存（不阻塞消息处理），以 phash 为文件名。
+ *  同一张图片无论出现在哪个消息中，只存一份（phash 去重）。
  *  导出供测试使用。 */
-export async function cacheEntryImage(url: string, session: string, msgId: number): Promise<void> {
-  if (hasCache(session, msgId)) return;
+export async function cacheEntryImage(url: string, _session: string, _msgId: number): Promise<void> {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
     if (!res.ok) return;
     const buf = await res.arrayBuffer();
     const mime = res.headers.get("content-type") || "image/jpeg";
     const base64 = Buffer.from(buf).toString("base64");
-    saveCachedImage(session, msgId, base64, mime, "(pending)", url);
-    console.log(`[${ts()}] [cache] cached image for ${session}_${msgId}`);
+    const phash = await computeDHash(base64, mime);
+    saveCachedImage(phash, base64, mime);
+    console.log(`[${ts()}] [cache] cached image phash=${phash}`);
   } catch {
     // 下载失败不阻塞消息处理
   }

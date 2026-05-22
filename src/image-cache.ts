@@ -1,15 +1,19 @@
 /**
- * image-cache.ts — 图片缓存管理
+ * image-cache.ts — 图片缓存管理（基于 phash）
  *
- * 将从 CDN 下载的图片和描述元数据持久化到 data/prod/images/，
- * 供 infer-stickers 和 replay 时复用，避免重复下载或重复调用视觉模型。
+ * 将从 CDN 下载的图片持久化到 data/prod/images/，以 phash 为文件名。
+ * 不存储 URL 或描述文本——描述由 agent 按需调用视觉模型生成，存入
+ * data/prod/inferences/{session}.jsonl（仅 phash → 描述映射）。
  *
  * 缓存文件:
- *   {session}_{msgId}.{ext}       — 图片文件
- *   {session}_{msgId}.json        — 描述元数据
+ *   data/prod/images/{phash}.{ext}   — 图片文件
+ *   data/prod/images/{phash}.meta    — 元数据（mime 类型等，最小化）
+ *
+ * 文件名即 phash，天然去重。同一张图片无论出现在哪个会话/消息中，
+ * 只存一份。
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 let CACHE_DIR = resolve(import.meta.dirname, "../data/prod/images");
@@ -22,10 +26,8 @@ export function setCacheDir(dir: string): string {
 }
 
 export interface CachedImage {
-  description: string;
+  base64: string;
   mime: string;
-  /** 原始来源 URL（用于溯源） */
-  sourceUrl?: string;
 }
 
 function ensureDir(): void {
@@ -34,81 +36,50 @@ function ensureDir(): void {
   }
 }
 
-/** 缓存键：{session}_{msgId}，如 group_313214094_1026175895 */
-export function cacheKey(session: string, msgId: number): string {
-  return `${session}_${msgId}`;
-}
-
-/** 读取缓存的图片描述，没有则返回 null */
-export function getCachedDescription(session: string, msgId: number): string | null {
-  const key = cacheKey(session, msgId);
-  const jsonPath = join(CACHE_DIR, `${key}.json`);
-  if (!existsSync(jsonPath)) return null;
-  try {
-    const data = JSON.parse(readFileSync(jsonPath, "utf8")) as CachedImage;
-    return data.description || null;
-  } catch {
-    return null;
+/** 从 phash 获取缓存的图片 base64 + mime，没有则返回 null。 */
+export function getCachedImage(phash: string): CachedImage | null {
+  if (!phash) return null;
+  const candidates = ["jpeg", "jpg", "png", "gif", "webp"];
+  for (const ext of candidates) {
+    const imgPath = join(CACHE_DIR, `${phash}.${ext}`);
+    if (existsSync(imgPath)) {
+      // 尝试读取 meta 获取准确的 mime
+      const metaPath = join(CACHE_DIR, `${phash}.meta`);
+      let mime = `image/${ext === "jpg" ? "jpeg" : ext}`;
+      if (existsSync(metaPath)) {
+        try {
+          const meta = JSON.parse(readFileSync(metaPath, "utf8"));
+          if (meta.mime) mime = meta.mime;
+        } catch { /* fallback to ext-based mime */ }
+      }
+      const base64 = readFileSync(imgPath, "base64");
+      return { base64, mime };
+    }
   }
+  return null;
 }
 
-/** 读取缓存的图片 base64 + mime，没有则返回 null */
-export function getCachedImage(
-  session: string,
-  msgId: number,
-): { base64: string; mime: string } | null {
-  const key = cacheKey(session, msgId);
-  const jsonPath = join(CACHE_DIR, `${key}.json`);
-  if (!existsSync(jsonPath)) return null;
-  try {
-    const data = JSON.parse(readFileSync(jsonPath, "utf8")) as CachedImage;
-    const ext = data.mime.split("/")[1] || "jpg";
-    const imgPath = join(CACHE_DIR, `${key}.${ext}`);
-    if (!existsSync(imgPath)) return null;
-    const base64 = readFileSync(imgPath, "base64");
-    return { base64, mime: data.mime };
-  } catch {
-    return null;
-  }
-}
-
-/** 保存图片 + 描述到缓存 */
-export function saveCachedImage(
-  session: string,
-  msgId: number,
-  base64: string,
-  mime: string,
-  description: string,
-  sourceUrl?: string,
-): void {
+/** 保存图片到缓存（key = phash）。已存在则静默跳过（天然去重）。 */
+export function saveCachedImage(phash: string, base64: string, mime: string): void {
+  if (!phash) return;
   ensureDir();
-  const key = cacheKey(session, msgId);
   const ext = mime.split("/")[1] || "jpg";
+  const imgPath = join(CACHE_DIR, `${phash}.${ext}`);
+  if (existsSync(imgPath)) return; // 已缓存，去重
 
-  // 写图片文件（二进制）
-  const imgPath = join(CACHE_DIR, `${key}.${ext}`);
   writeFileSync(imgPath, Buffer.from(base64, "base64"));
 
-  // 写描述元数据
-  const meta: CachedImage = { description, mime };
-  if (sourceUrl) meta.sourceUrl = sourceUrl;
-  const jsonPath = join(CACHE_DIR, `${key}.json`);
-  writeFileSync(jsonPath, JSON.stringify(meta, null, 2), "utf8");
+  // 最小化元数据
+  const metaPath = join(CACHE_DIR, `${phash}.meta`);
+  writeFileSync(metaPath, JSON.stringify({ mime }), "utf8");
 }
 
-/** 检查某条消息是否有缓存 */
-export function hasCache(session: string, msgId: number): boolean {
-  return getCachedDescription(session, msgId) !== null;
-}
-
-/** 列出所有缓存的 key */
-export function listCachedKeys(): string[] {
-  if (!existsSync(CACHE_DIR)) return [];
-  const files = readdirSync(CACHE_DIR);
-  const keys = new Set<string>();
-  for (const f of files) {
-    const key = f.replace(/\.(json|jpg|jpeg|png|gif|webp)$/, "");
-    if (key !== f) keys.add(key);
+/** 检查某 phash 是否有缓存。 */
+export function hasCache(phash: string): boolean {
+  if (!phash) return false;
+  const candidates = ["jpeg", "jpg", "png", "gif", "webp"];
+  for (const ext of candidates) {
+    if (existsSync(join(CACHE_DIR, `${phash}.${ext}`))) return true;
   }
-  return [...keys];
+  return false;
 }
