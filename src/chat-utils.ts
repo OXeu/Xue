@@ -12,6 +12,19 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stripCqCodes } from "./cq-codes";
+import {
+  getSystemPrompt,
+  getReplyRules,
+  getScenarioPrompt,
+  getSilenceCheckPrompt,
+} from "./prompts";
+
+// ── LLM 配置 ────────────────────────────────────────────
+
+const LLM_API_KEY = process.env.LLM_API_KEY || "";
+const LLM_BASE_URL = process.env.LLM_BASE_URL || "https://api.openai.com/v1";
+const LLM_MODEL = process.env.LLM_MODEL || "gpt-4o-mini";
+const BOT_NAME = process.env.BOT_NAME || "Rin";
 
 // ── 消息类型 ────────────────────────────────────────────
 
@@ -276,5 +289,62 @@ export function persistBestDescription(
     writeFileSync(filePath, filtered.join("\n") + "\n", "utf8");
   } catch {
     // 静默失败，持久化不是关键路径
+  }
+}
+
+// ── 快速沉默决策 ────────────────────────────────────
+
+/** 对低确定性触发（random/bystander/media），先问模型有没有话想说。
+ *  返回 SILENT 或模型生成的简短回复。 */
+export async function quickDecideSilence(
+  contextText: string,
+  senderName: string,
+  messageText: string,
+  scenarioKey: string,
+  topicSummary: string,
+  atmosphereTag: string,
+): Promise<string | null> {
+  const url = `${LLM_BASE_URL.replace(/\/+$/, "")}/chat/completions`;
+  const scenarioPrompt = getScenarioPrompt(scenarioKey, BOT_NAME);
+
+  const systemContent = [
+    getSystemPrompt(BOT_NAME),
+    getReplyRules(),
+    topicSummary,
+    atmosphereTag,
+    `\n下面是这个群最近的消息：`,
+    `【${scenarioPrompt}】`,
+  ].filter(Boolean).join("\n");
+
+  try {
+    const userMsg = getSilenceCheckPrompt(contextText, senderName, messageText);
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${LLM_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: LLM_MODEL,
+        messages: [
+          { role: "system", content: systemContent },
+          {
+            role: "user",
+            content: userMsg,
+          },
+        ],
+        max_tokens: 60,
+        temperature: 0.8,
+      }),
+    });
+
+    if (!res.ok) return null;
+
+    const data = (await res.json()) as {
+      choices: { message: { content?: string | null } }[];
+    };
+    return data.choices?.[0]?.message?.content?.trim() ?? null;
+  } catch {
+    return null;
   }
 }
