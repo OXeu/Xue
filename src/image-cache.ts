@@ -1,8 +1,8 @@
 /**
  * image-cache.ts — 图片缓存管理
  *
- * 将 describeImage 下载的图片和描述持久化到 data/test-images/，
- * 供 replay 时复用，避免每次重放都请求随机图或重复调用视觉模型。
+ * 将从 CDN 下载的图片和描述元数据持久化到 data/test-images/，
+ * 供 infer-stickers 和 replay 时复用，避免重复下载或重复调用视觉模型。
  *
  * 缓存文件:
  *   {session}_{msgId}.{ext}       — 图片文件
