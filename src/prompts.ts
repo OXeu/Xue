@@ -61,8 +61,8 @@ export function getScenarioPrompt(scenario: string, botName: string): string {
   if (match) {
     return match[1].trim().replace(/\{BOT_NAME\}/g, botName);
   }
-  // Fallback: 返回核心身份（不含场景章节）
-  return getCoreIdentity(botName);
+  // Fallback: 返回 default 场景（群聊普通成员行为）
+  return getScenarioPrompt("default", botName);
 }
 
 /** 获取 reply.md 内容（回复风格要求） */

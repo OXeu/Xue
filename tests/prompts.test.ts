@@ -69,11 +69,10 @@ test("getScenarioPrompt 为每个已知场景返回非空内容", () => {
   }
 });
 
-test("getScenarioPrompt('nonexistent', 'Rin') 返回核心身份作为 fallback", () => {
+test("getScenarioPrompt('nonexistent', 'Rin') 返回 default 场景作为 fallback", () => {
   const result = getScenarioPrompt("nonexistent", "Rin");
-  // 应包含核心身份而非空字符串
-  expect(result).toContain("你叫 Rin");
-  // 不应包含 fallback 章节结构
+  // 应回退到 default 场景（"你只是群里的普通成员"），而非空字符串
+  expect(result).toContain("普通成员");
   expect(result).not.toContain("## scenario:");
 });
 
