@@ -17,6 +17,9 @@
     "start": "bash scripts/start-listen.sh",
     "stop": "bash scripts/stop-listen.sh",
     "status": "bash scripts/status-listen.sh",
+    "start-agent": "bash scripts/start-agent.sh",
+    "stop-agent": "bash scripts/stop-agent.sh",
+    "status-agent": "bash scripts/status-agent.sh",
     "simulate-messages": "bash scripts/simulate-messages.sh",
     "lint": "echo 'TODO'"
   },

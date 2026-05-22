@@ -43,7 +43,10 @@ rin-research-humanize/
 │   ├── start-listen.sh           # 启动监听器（写 PID、日志重定向）
 │   ├── stop-listen.sh            # 停止监听器
 │   ├── status-listen.sh          # 检查监听器状态与数据量
-│   └── ensure-listen.sh          # 保活脚本（crontab 用）
+│   ├── ensure-listen.sh          # 保活脚本（crontab 用）
+│   ├── start-agent.sh            # 启动 agent（持久化）
+│   ├── stop-agent.sh             # 停止 agent
+│   └── status-agent.sh           # 检查 agent 状态
 ├── data/
 │   ├── baseline/                 # 基线 JSONL（已采集 100 条）
 │   └── raw/                      # 群聊监听数据（运行时生成，不提交）
@@ -82,7 +85,10 @@ rin-research-humanize/
 | `bun run status` | 检查监听器状态与数据量 |
 | `bun run simulate-messages` | 生成 20 条多样化模拟群聊消息到 data/raw/，用于端到端管线验证 |
 | `bun run listen` | 前台运行监听器（调试用） |
-| `bun run agent` | 启动群聊回复 agent（需设置 LLM_API_KEY） |
+| `bun run start-agent` | 启动 agent（持久化，后台） |
+| `bun run stop-agent` | 停止 agent |
+| `bun run status-agent` | 检查 agent 运行状态 |
+| `bun run agent` | 前台运行 agent（调试用） |
 
 ## 当前进展
 
