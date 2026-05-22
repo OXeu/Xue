@@ -16,6 +16,7 @@
     "start": "bash scripts/start-listen.sh",
     "stop": "bash scripts/stop-listen.sh",
     "status": "bash scripts/status-listen.sh",
+    "simulate-messages": "bash scripts/simulate-messages.sh",
     "lint": "echo 'TODO'"
   },
   "devDependencies": {

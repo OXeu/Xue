@@ -2,3 +2,8 @@ node_modules
 .env
 *.log
 data/
+
+# 自动生成的运行报告（可随时重新生成）
+docs/raw-summary-*.md
+docs/eval-transformer-*.md
+docs/transform-samples-*.md

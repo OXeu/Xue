@@ -79,6 +79,7 @@ rin-research-humanize/
 | `bun run start` | 启动监听器（持久化，写 PID 文件） |
 | `bun run stop` | 停止监听器 |
 | `bun run status` | 检查监听器状态与数据量 |
+| `bun run simulate-messages` | 生成 20 条多样化模拟群聊消息到 data/raw/，用于端到端管线验证 |
 | `bun run listen` | 前台运行监听器（调试用） |
 
 ## 实验进展
