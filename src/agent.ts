@@ -414,10 +414,11 @@ function connect(): void {
       return;
     }
 
-    // 只处理 group message 事件
-    if (data.post_type !== "message" || data.message_type !== "group") return;
+    // 处理 group 和 private 两种消息类型
+    if (data.post_type !== "message" || (data.message_type !== "group" && data.message_type !== "private")) return;
 
-    const groupId = data.group_id as number;
+    const isPrivate = data.message_type === "private";
+    const sessionId = isPrivate ? `private_${data.user_id}` : `group_${data.group_id}`;
     const userId = data.user_id as number;
     const rawMessage = typeof data.raw_message === "string" ? data.raw_message : "";
 
@@ -427,7 +428,7 @@ function connect(): void {
     const cleanText = stripCqCodes(rawMessage);
 
     const entry: ListenEntry = {
-      session: `group_${groupId}`,
+      session: sessionId,
       msgId: data.message_id as number,
       time: data.time as number,
       type: msgType,
@@ -442,8 +443,10 @@ function connect(): void {
       segmentTypes: [],
     };
 
-    // 决策是否回复
-    const decision = decideReply(entry, msgType, rawMessage);
+    // 决策是否回复（私聊必回，群聊按原有逻辑）
+    const decision = isPrivate
+      ? { should: true, reason: "private" }
+      : decideReply(entry, msgType, rawMessage);
     if (!decision.should) return;
 
     // 如果有图片，尝试获取描述
@@ -463,9 +466,11 @@ function connect(): void {
       ? `当前话题：${keywords.join("、")}`
       : "";
 
-    // 决定角色定位（被 @ 了 vs 旁观者）
+    // 决定角色定位
     let roleInstruction: string;
-    if (imageDescription) {
+    if (isPrivate) {
+      roleInstruction = `【这是私聊消息，对方直接对你说的话。请以 ${BOT_NAME} 的身份自然回应。】`;
+    } else if (imageDescription) {
       roleInstruction = `【消息中包含一张图片，描述如下：${imageDescription}。回复时可以结合图片内容。】`;
     } else if (decision.reason === "at-self") {
       roleInstruction = `【消息是发给你的，你被直接 @ 了，请以 ${BOT_NAME} 的身份回应。】`;
@@ -505,8 +510,15 @@ function connect(): void {
       if (reply) {
         if (DRY_RUN) {
           log(`[dry-run] would reply to ${entry.session}: ${reply.slice(0, 200)}`);
+        } else if (isPrivate) {
+          const payload = JSON.stringify({
+            action: "send_private_msg",
+            params: { user_id: userId, message: reply },
+          });
+          ws!.send(payload);
+          log(`replied private: ${reply.slice(0, 100)}`);
         } else {
-          sendGroupMsg(ws!, groupId, reply);
+          sendGroupMsg(ws!, data.group_id as number, reply);
           log(`replied: ${reply.slice(0, 100)}`);
         }
       } else {
