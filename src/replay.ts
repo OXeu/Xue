@@ -33,6 +33,7 @@ import {
   getSystemPrompt,
   getScenarioPrompt,
   getReplyRules,
+  getSilenceCheckPrompt,
 } from "./prompts";
 
 // ── 配置 ────────────────────────────────────────────────
@@ -395,6 +396,7 @@ async function quickDecideSilence(
   ].filter(Boolean).join("\n");
 
   try {
+    const userMsg = getSilenceCheckPrompt(contextText, senderName, messageText);
     const res = await fetch(url, {
       method: "POST",
       headers: {
@@ -407,7 +409,7 @@ async function quickDecideSilence(
           { role: "system", content: systemContent },
           {
             role: "user",
-            content: `【群聊上下文】\n${contextText}\n\n【新消息】${senderName}: ${messageText}\n\n有自然的话就说出来，没有就只回复 SILENT。`,
+            content: userMsg,
           },
         ],
         max_tokens: 60,

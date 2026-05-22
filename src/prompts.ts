@@ -75,6 +75,18 @@ export function getVisionFormat(): string {
   return loadPrompt("vision");
 }
 
+/** 获取 silence.md 内容并替换占位符，用于快速沉默决策 */
+export function getSilenceCheckPrompt(
+  context: string,
+  sender: string,
+  message: string,
+): string {
+  return loadPrompt("silence")
+    .replace(/\{CONTEXT\}/g, context)
+    .replace(/\{SENDER\}/g, sender)
+    .replace(/\{MESSAGE\}/g, message);
+}
+
 // ── 工具 ────────────────────────────────────────────────
 
 function escapeRegex(s: string): string {
