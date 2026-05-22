@@ -4,6 +4,11 @@
  * 监听群聊消息，加载上下文，调用 LLM 生成回复，通过 OneBot 发送。
  * 与 listen.ts 互不干扰（各自使用独立的 WS 连接）。
  *
+ * 图片消息处理流程（视觉问答循环）：
+ *   收到图片 → 系统提示 Agent 可自主提问 → Agent 输出 [VISION]问题[/VISION]
+ *   → 系统调用视觉模型 → 答案注入对话 → Agent 可继续追问或直接回复
+ *   （每消息最多 5 轮问答）
+ *
  * 用法:
  *   LLM_API_KEY=sk-xxx bun run src/agent.ts
  *
