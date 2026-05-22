@@ -10,6 +10,7 @@
     "analyze-raw": "bun src/analyze-raw.ts",
     "analyze-style": "bun src/analyze-style.ts",
     "style-demo": "bun src/style-transformer.ts",
+    "eval-transformer": "bun src/evaluate-transformer.ts",
     "listen": "bun src/listen.ts",
     "lint": "echo 'TODO'"
   },
