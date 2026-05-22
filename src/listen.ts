@@ -76,6 +76,10 @@ interface ListenEntry {
   segmentTypes: string[];
   /** 图片 URL 列表（如有）。 */
   imageUrls?: string[];
+  /** 原始 CQ 码（未剥离的 raw_message 字段）。 */
+  raw_message: string;
+  /** 完整消息段数组（OneBot 数组格式，保留原始数据）。 */
+  segments: MessageSegment[];
 }
 
 // ── 路径 ────────────────────────────────────────────────
@@ -162,6 +166,15 @@ export function estimateMsgType(segmentTypes: string[], text: string): string {
   if (segmentTypes.length === 1 && segmentTypes[0] === "image") return "image";
   if (segmentTypes.every((t) => t === "text" || t === "face")) return "text+face";
   return "mixed";
+}
+
+/** 将 message 字段统一转为数组格式（string 格式转成单段 text）。 */
+function normalizeSegments(message: string | unknown[]): MessageSegment[] {
+  if (typeof message === "string") {
+    return [{ type: "text", data: { text: message } }];
+  }
+  if (!Array.isArray(message)) return [];
+  return message as MessageSegment[];
 }
 
 // ── 写日志 ──────────────────────────────────────────────
@@ -257,6 +270,8 @@ function connect(wsUrl: string, accessToken: string): void {
       atUsers: parsed.atUsers,
       replyTo: parsed.replyTo,
       segmentTypes: parsed.segmentTypes,
+      raw_message: data.raw_message,
+      segments: normalizeSegments(data.message),
     };
     if (parsed.imageUrls.length > 0) {
       entry.imageUrls = parsed.imageUrls;
