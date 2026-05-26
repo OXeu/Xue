@@ -1,18 +1,19 @@
 # Xue
 
-QQ 群聊/私聊 agent — 监听群聊和私聊消息，带视觉理解能力（gemma4:26b via Ollama），通过 OneBot 协议回复。
+QQ 群聊/私聊 agent。它通过 OneBot 协议监听消息、维护上下文、处理图片理解，并按配置决定是否回复。
 
-核心思路：bot 在群聊里像狼人杀里的狼人——目标是模仿真人，而不是证明自己最聪明。每次回复都基于群聊的真实风格特征做约束。
+核心思路：把消息采集、上下文构建、回复决策和模型调用拆成可验证的模块。回复行为由 prompt、会话配置和概率策略共同约束，避免无关或过度频繁的发言。
 
 ## 项目结构
 
 ```
 Xue/
 ├── config/
-│   └── session-config.json  # 按会话的白名单、回复概率和细粒度配置
+│   └── session-config.json  # 本地会话配置，已被 .gitignore 排除
 ├── src/
-│   ├── agent.ts            # 主 agent：WS 监听 → 上下文 → 视觉问答 → LLM → 回复
-│   ├── listen.ts           # 消息监听器：记录 JSONL + 异步缓存图片到 images/
+│   ├── agent/              # 主 agent：上下文 → 视觉问答 → LLM → 回复
+│   ├── listen/             # 消息监听器：记录 JSONL + 异步缓存图片到 images/
+│   ├── shared/             # agent/listen 共享事件和类型
 │   ├── phash.ts            # 感知哈希（dHash），用于不同分辨率下的相似图片去重（阈值 3）
 │   ├── simulate.ts         # 模拟重放：不调 LLM，只输出决策和 prompt，零成本评估
 │   ├── replay.ts           # 重放历史消息：调 LLM 生成实际回复，用于验证
@@ -36,8 +37,6 @@ Xue/
 ├── data/
 │   ├── raw/                # 监听器 JSONL（运行时生成）
 │   └── images/             # 图片缓存（listen 异步下载）
-├── docs/
-│   └── experiment-logs/    # 实验记录
 ├── .env                    # 配置（参考 .env.example）
 ├── package.json
 └── tsconfig.json
@@ -64,14 +63,16 @@ bun run start-agent    # 后台持久化
 bun src/agent/main.ts  # 前台调试
 ```
 
-## 五项核心机制
+## 核心机制
 
 ### 1. 群聊特征分析
-（同前）
+从历史消息中提取会话级特征，用于生成更贴近当前上下文的系统提示。
+
 ### 2. 风格分析
-（同前）
+统计消息长度、语气词、问句比例等特征，为回复风格提供轻量约束。
+
 ### 3. 语气指导
-（同前）
+把会话特征转换为简短指导，附加到模型上下文中，减少和当前对话风格不一致的输出。
 
 ### 4. 视觉问答（Agent 自主提问）
 
@@ -94,21 +95,15 @@ Agent 看到答案后，可以继续追问（再发一个 `[VISION]`），
 - 视觉模型返回失败时会注入 `(分析失败)` 占位符
 
 ### 5. 回复规则
-回复约束，配置在 `prompts/reply.md`，每次回复时注入 system prompt：
+回复约束配置在 `prompts/reply.md`，每次回复时注入 system prompt。主要目标是：
 
-- 不要列点，不要 formal
-- 使用口语化的表达
-- 不要使用 emoji（😄😂😅等）
-- 不要重复对方的话，直接问或直接说
-- 一句话能说完就不要写两句
-- 不要做结论性总结（"确实，xxx是关键"、"xxx明显"一类的话听起来像懂哥）
-- 不确定怎么回就回"草"、"乐"、"？"之类的一两个字，或者不接。但不要连续多次都用同一个词，偶尔换着来。
-- 回复前先确认自己理解了当前话题的进展。如果没跟上上下文的变化（比如别人已经纠正过的事你还不知道），就问或保持沉默，不要做猜测性结论。
-- 如果不确定上下文或对话题没有足够了解，不要强行接话。不知道就保持沉默，不必每句话都回应。
-- 遇到不认识的网络梗/生僻表达/特定名词时，直接问「XX 是什么」或保持沉默，不要用模糊反应（如「什么情况」、「这啥」）来掩饰。
-- 遇到抽象的表达或可能是昵称/内部梗的内容，优先直接问清楚，不要试着去"接"。
+- 控制回复长度和频率
+- 避免重复对方原话
+- 避免脱离上下文的总结或推断
+- 对信息不足、上下文不明确的消息保持保守
+- 对图片消息先通过视觉工具补充信息，再决定是否回复
 
-### 5. 回复决策
+### 6. 回复决策
 非 @ 场景下分级控制回复概率（以下为默认值，可通过 `config/session-config.json` 按会话覆写）：
 
 | 场景 | 默认回复概率 | 说明 |
@@ -144,7 +139,7 @@ LLM_API_KEY=sk-xxx MAX_MSGS=22 bun run replay
     "media": 0.1,
     "bystander": 0.05
   },
-  "group_313214094": {
+  "group_A": {
     "reply": true,
     "probabilities": {
       "mentioned": 0.5,
@@ -153,7 +148,7 @@ LLM_API_KEY=sk-xxx MAX_MSGS=22 bun run replay
     },
     "replyChance": 0.2
   },
-  "group_1027996396": {
+  "group_B": {
     "reply": false
   }
 }
@@ -167,7 +162,7 @@ LLM_API_KEY=sk-xxx MAX_MSGS=22 bun run replay
 | `probabilities.mentioned` | `number` 0–1 | 被提到名字时的回复概率。默认 `0.7`。 |
 | `probabilities.media` | `number` 0–1 | 纯表情/图片消息的回复概率。默认 `0.1`。 |
 | `probabilities.bystander` | `number` 0–1 | 旁观（@ 别人）时的回复概率。默认 `0.05`。 |
-| `{session_id}` | `object`（可选） | 按会话 ID 配置。键名如 `group_313214094` 或 `private_123456`。 |
+| `{session_id}` | `object`（可选） | 按会话 ID 配置。键名如 `group_A` 或 `private_A`。 |
 | `{session_id}.reply` | `boolean` | 真实回复开关。`true` = 覆写 `DRY_RUN` 环境变量，实际发送消息。 |
 | `{session_id}.probabilities` | `object`（可选） | **会话级**回复概率，覆盖全局 `probabilities`。缺字段回退到全局值。 |
 | `{session_id}.replyChance` | `number` 0–1（可选） | **会话级**「其他」（random）场景的回复概率，覆盖 `REPLY_CHANCE` 环境变量。默认 `0.3`。 |
@@ -212,8 +207,8 @@ LLM_API_KEY=sk-xxx MAX_MSGS=22 bun run replay
 | `VISION_BASE_URL` | 视觉 API 地址 | `http://127.0.0.1:11444/v1` |
 | `ONEBOT_WS_URL` | OneBot 正向 WS 网关 | `ws://localhost:6700` |
 | `ONEBOT_ACCESS_TOKEN` | WS 鉴权 token | — |
-| `BOT_NAME` | 名字 | `Rin` |
-| `BOT_QQ` | Bot QQ 号 | `3042160393` |
+| `BOT_NAME` | Bot 名称 | — |
+| `BOT_QQ` | Bot QQ 号 | — |
 | `DRY_RUN` | 仅模拟不发送 | `true`（调试用） |
 
 ## 命令
