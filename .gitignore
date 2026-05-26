@@ -2,7 +2,9 @@ node_modules
 config/
 .env
 *.log
-data/
+data/*
+!data/test-images/
+!data/test-images/**
 
 # 但 test-images 是确定性测试 fixture（固定种子），应保留
 !data/test-images/
