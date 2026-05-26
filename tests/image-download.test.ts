@@ -19,7 +19,7 @@ afterEach(() => {
 });
 
 describe("downloadImage", () => {
-  test("成功下载并返回 base64 + mime", async () => {
+  test("成功下载并返回 buffer/base64 + mime", async () => {
     const body = new Uint8Array([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
     globalThis.fetch = async () => new Response(body, {
       status: 200,
@@ -29,6 +29,7 @@ describe("downloadImage", () => {
     const result = await downloadImage("https://example.com/img.png");
     expect(result).not.toBeNull();
     expect(result!.mime).toBe("image/png");
+    expect(result!.buffer).toEqual(Buffer.from(body));
     expect(result!.base64).toBe(Buffer.from(body).toString("base64"));
   });
 
@@ -39,6 +40,7 @@ describe("downloadImage", () => {
     const result = await downloadImage("https://example.com/img.jpg");
     expect(result).not.toBeNull();
     expect(result!.mime).toBe("image/jpeg");
+    expect(result!.buffer).toEqual(Buffer.from(body));
     expect(result!.base64).toBe(Buffer.from(body).toString("base64"));
   });
 
@@ -92,6 +94,7 @@ describe("downloadImage", () => {
     const result = await downloadImage("https://example.com/data.bin");
     expect(result).not.toBeNull();
     expect(result!.mime).toBe("application/octet-stream");
+    expect(result!.buffer).toEqual(Buffer.from(body));
     expect(result!.base64).toBe(Buffer.from(body).toString("base64"));
   });
 

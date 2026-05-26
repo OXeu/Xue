@@ -11,12 +11,6 @@
 
 import sharp from "sharp";
 
-/** 计算图片 base64 的 dHash，返回 16 字符 hex 字符串。 */
-export async function computeDHash(base64: string, mime: string): Promise<string> {
-  const buffer = Buffer.from(base64, "base64");
-  return computeDHashFromBuffer(buffer);
-}
-
 /** 从图片 Buffer 计算 dHash。 */
 export async function computeDHashFromBuffer(buffer: Buffer): Promise<string> {
   // 缩放到 9×8 灰度，取原始像素值

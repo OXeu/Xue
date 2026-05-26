@@ -30,7 +30,7 @@ if [ -f .env ]; then
   done < .env
 fi
 
-nohup bun run src/agent.ts >> "$LOG_FILE" 2>&1 &
+nohup bun run src/agent/main.ts >> "$LOG_FILE" 2>&1 &
 PID=$!
 echo $PID > "$PID_FILE"
 

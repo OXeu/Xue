@@ -10,6 +10,7 @@ const TIMEOUT_MS = 10_000;
 const FALLBACK_MIME = "image/jpeg";
 
 export interface DownloadedImage {
+  buffer: Buffer;
   base64: string;
   mime: string;
 }
@@ -22,10 +23,11 @@ export async function downloadImage(url: string): Promise<DownloadedImage | null
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
     if (!res.ok) return null;
-    const buf = await res.arrayBuffer();
-    if (!buf || buf.byteLength === 0) return null;
+    const arrayBuffer = await res.arrayBuffer();
+    if (!arrayBuffer || arrayBuffer.byteLength === 0) return null;
+    const buffer = Buffer.from(arrayBuffer);
     const mime = res.headers.get("content-type") || FALLBACK_MIME;
-    return { base64: Buffer.from(buf).toString("base64"), mime };
+    return { buffer, base64: buffer.toString("base64"), mime };
   } catch {
     return null;
   }
@@ -36,13 +38,17 @@ export async function downloadImage(url: string): Promise<DownloadedImage | null
  * Gemma4 等模型不支持 GIF 输入。
  */
 export async function gifToJpeg(base64: string, mime: string): Promise<DownloadedImage> {
-  if (mime !== "image/gif") return { base64, mime };
+  if (mime !== "image/gif") {
+    const buffer = Buffer.from(base64, "base64");
+    return { buffer, base64, mime };
+  }
   try {
     const sharp = (await import("sharp")).default;
     const buf = Buffer.from(base64, "base64");
     const jpeg = await sharp(buf).jpeg({ quality: 85 }).toBuffer();
-    return { base64: jpeg.toString("base64"), mime: "image/jpeg" };
+    return { buffer: jpeg, base64: jpeg.toString("base64"), mime: "image/jpeg" };
   } catch {
-    return { base64, mime };
+    const buffer = Buffer.from(base64, "base64");
+    return { buffer, base64, mime };
   }
 }

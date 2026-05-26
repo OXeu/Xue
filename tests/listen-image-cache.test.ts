@@ -14,8 +14,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 
-import { cacheEntryImage } from "../src/listen";
-import { computeDHash } from "../src/phash";
+import { cacheEntryImage } from "../src/listen/index";
+import { computeDHashFromBuffer } from "../src/phash";
 import { setCacheDir, hasCache, getCachedImage } from "../src/image-cache";
 
 let tmpDir = "";
@@ -54,7 +54,7 @@ test("cacheEntryImage: 图片消息触发缓存写入（phash 文件名）", asy
   );
 
   try {
-    await cacheEntryImage("https://example.com/test.png", "test_group", 1001);
+    await cacheEntryImage("https://example.com/test.png");
 
     // 验证缓存文件被创建（phash 命名）
     const files = readdirSync(tmpDir);
@@ -92,11 +92,11 @@ test("cacheEntryImage: 相同图片（相同 phash）跳过重复下载", async 
 
   try {
     // 第一次调用：下载并缓存（不同会话，同一张图）
-    await cacheEntryImage("https://example.com/test.png", "group_A", 2001);
+    await cacheEntryImage("https://example.com/test.png");
     expect(fetchCount).toBe(1);
 
     // 第二次调用：不同 session/msgId，但同一张图 → 应跳过下载
-    await cacheEntryImage("https://example.com/test.png", "group_B", 2002);
+    await cacheEntryImage("https://example.com/test.png");
     // fetch 被再次调用（URL 相同，但 listen.ts 不缓存有状态），
     // 但保存时会检查已有 phash 并跳过重复
     // 验证文件仍只有一组
@@ -116,7 +116,7 @@ test("cacheEntryImage: fetch 失败时静默跳过", async () => {
   );
 
   try {
-    await cacheEntryImage("https://example.com/fail.png", "test_group", 1003);
+    await cacheEntryImage("https://example.com/fail.png");
 
     // 不应有缓存文件
     const files = readdirSync(tmpDir);
@@ -134,7 +134,7 @@ test("cacheEntryImage: HTTP 非 200 时静默跳过", async () => {
   );
 
   try {
-    await cacheEntryImage("https://example.com/404.png", "test_group", 1004);
+    await cacheEntryImage("https://example.com/404.png");
 
     const files = readdirSync(tmpDir);
     expect(files.length).toBe(0);
@@ -154,7 +154,7 @@ test("cacheEntryImage: 成功下载时返回 phash 字符串", async () => {
   );
 
   try {
-    const phash = await cacheEntryImage("https://example.com/ret.png", "test_session", 3001);
+    const phash = await cacheEntryImage("https://example.com/ret.png");
 
     expect(phash).not.toBeNull();
     expect(phash).toMatch(/^[0-9a-f]{16}$/);
@@ -170,7 +170,7 @@ test("cacheEntryImage: 成功下载时返回 phash 字符串", async () => {
   }
 });
 
-test("cacheEntryImage: 返回的 phash 与直接 computeDHash 一致", async () => {
+test("cacheEntryImage: 返回的 phash 与直接 computeDHashFromBuffer 一致", async () => {
   const mockImage = pngBuffer();
   const originalFetch = globalThis.fetch;
 
@@ -181,12 +181,11 @@ test("cacheEntryImage: 返回的 phash 与直接 computeDHash 一致", async () 
   );
 
   try {
-    const phash = await cacheEntryImage("https://example.com/direct.png", "test_session", 3002);
+    const phash = await cacheEntryImage("https://example.com/direct.png");
     expect(phash).not.toBeNull();
 
-    // 直接用 computeDHash 算一遍，结果应一致
-    const base64 = mockImage.toString("base64");
-    const expected = await computeDHash(base64, "image/png");
+    // 直接用 computeDHashFromBuffer 算一遍，结果应一致
+    const expected = await computeDHashFromBuffer(mockImage);
     expect(phash).toBe(expected);
   } finally {
     globalThis.fetch = originalFetch;
@@ -201,7 +200,7 @@ test("cacheEntryImage: fetch 失败时返回 null", async () => {
   );
 
   try {
-    const phash = await cacheEntryImage("https://example.com/null.png", "test_session", 3003);
+    const phash = await cacheEntryImage("https://example.com/null.png");
     expect(phash).toBeNull();
   } finally {
     globalThis.fetch = originalFetch;
@@ -216,7 +215,7 @@ test("cacheEntryImage: HTTP 非 200 时返回 null", async () => {
   );
 
   try {
-    const phash = await cacheEntryImage("https://example.com/404b.png", "test_session", 3004);
+    const phash = await cacheEntryImage("https://example.com/404b.png");
     expect(phash).toBeNull();
   } finally {
     globalThis.fetch = originalFetch;

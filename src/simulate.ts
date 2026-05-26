@@ -30,21 +30,7 @@ const CONFIG_PATH = resolve(import.meta.dirname, "../config/session-config.json"
 
 // ── 类型 ────────────────────────────────────────────────
 
-interface ListenEntry {
-  session: string;
-  msgId: number;
-  time: number;
-  type: string;
-  text: string;
-  userId: number;
-  nickname: string;
-  card?: string;
-  subType: string;
-  selfId: number;
-  atUsers: number[];
-  replyTo?: number;
-  segmentTypes?: string[];
-}
+import type { ListenEntry } from "./shared/types";
 
 interface ReplyDecision {
   should: boolean;

@@ -1,22 +1,22 @@
 /**
- * chat-utils.ts — agent.ts 和 replay.ts 共享的工具函数
+ * chat-utils.ts — agent 和 replay 共享的工具函数
  *
- * 本模块承载两份文件之间逐字相同的纯函数，消除代码重复。
+ * 本模块承载纯函数，消除代码重复。
  * 包括：关键词提取、气氛分析、风格分析、话题画像、最近消息加载、
  * 视觉描述质量检查与持久化。
  *
  * 不包含存在行为差异或有深度模块级耦合的函数
- * （如 buildContext, callLlmWithTools, decideReply）。
+ *（如 buildContext, callLlmWithTools, decideReply）。
  */
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { ListenEntry } from "./shared/types";
 import { stripCqCodes } from "./cq-codes";
 import {
   getSystemPrompt,
   getReplyRules,
   getScenarioPrompt,
-  getSilenceCheckPrompt,
 } from "./prompts";
 
 // ── LLM 配置 ────────────────────────────────────────────
@@ -28,22 +28,134 @@ const BOT_NAME = process.env.BOT_NAME || "Rin";
 
 // ── 消息类型 ────────────────────────────────────────────
 
-export interface ListenEntry {
-  session: string;
-  msgId: number;
-  time: number;
+// ListenEntry 由 shared/types.ts 提供
+
+interface ContextReplyRef {
+  sender: string;
+  text: string;
+}
+
+interface SerializedContextEntry {
+  msg_id: number;
+  time: string;
+  sender: string;
+  mentions?: number[];
+  mentioned_bot?: boolean;
+  reply_to?: {
+    msg_id?: number;
+    sender?: string;
+    text?: string;
+  };
   type: string;
   text: string;
-  userId: number;
-  nickname: string;
-  card?: string;
-  senderRole?: string;
-  subType: string;
-  selfId: number;
-  atUsers: number[];
-  replyTo?: number;
-  segmentTypes?: string[];
-  imageUrls?: string[];
+  has_image?: boolean;
+  image_phash?: string;
+  is_latest?: boolean;
+}
+
+interface SerializedUserMessage {
+  session_type: "group" | "private";
+  bot_user_id: number;
+  bot_name: string;
+  instruction?: string;
+  continuation_hint?: string;
+  latest_message_rule?: string;
+}
+
+interface ChatMessage {
+  role: "user" | "system" | "assistant" | "tool";
+  content: string | null;
+}
+
+function formatEntryTime(ts: number): string {
+  return new Date(ts * 1000).toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Asia/Shanghai",
+  });
+}
+
+function serializeContextEntry(
+  entry: ListenEntry,
+  replyMap?: Map<number, ContextReplyRef>,
+): SerializedContextEntry {
+  const hasImage = entry.segmentTypes?.includes("image") ?? false;
+  const fallbackText = hasImage ? "[图片]" : `[${entry.type}]`;
+  const serialized: SerializedContextEntry = {
+    msg_id: entry.msgId,
+    time: formatEntryTime(entry.time),
+    sender: entry.card || entry.nickname,
+    type: entry.type,
+    text: entry.text || fallbackText,
+  };
+
+  if (entry.atUsers.length > 0) {
+    serialized.mentions = entry.atUsers;
+    if (entry.atUsers.includes(Number(process.env.BOT_QQ || "3042160393"))) {
+      serialized.mentioned_bot = true;
+    }
+  }
+
+  if (entry.replyTo) {
+    const replyTo = replyMap?.get(entry.replyTo);
+    serialized.reply_to = replyTo
+      ? { msg_id: entry.replyTo, sender: replyTo.sender, text: replyTo.text }
+      : { msg_id: entry.replyTo };
+  }
+
+  if (hasImage) {
+    serialized.has_image = true;
+  }
+
+  if (entry.phash?.[0]) {
+    serialized.image_phash = entry.phash[0];
+  }
+
+  return serialized;
+}
+
+export function buildStructuredContext(entries: ListenEntry[], replyMap?: Map<number, ContextReplyRef>): SerializedContextEntry[] {
+  return entries.map((entry, index) => {
+    const serialized = serializeContextEntry(entry, replyMap);
+    if (index === entries.length - 1) {
+      serialized.is_latest = true;
+    }
+    return serialized;
+  });
+}
+
+export function buildUserMessages(args: {
+  sessionType: "group" | "private";
+  context: SerializedContextEntry[];
+  continuationHint?: string;
+  instruction?: string;
+}): ChatMessage[] {
+  const metadata: SerializedUserMessage = {
+    session_type: args.sessionType,
+    bot_user_id: Number(process.env.BOT_QQ || "3042160393"),
+    bot_name: BOT_NAME,
+    latest_message_rule: "context 中最后一条 is_latest=true 的消息就是当前待回复消息，回复时优先围绕它，而不是更早的消息。",
+  };
+
+  if (args.continuationHint) {
+    metadata.continuation_hint = args.continuationHint;
+  }
+
+  const instruction = args.instruction || "想回复就直接说，觉得没什么可说的就保持沉默。";
+  const messages: ChatMessage[] = [];
+
+  for (const contextEntry of args.context) {
+    messages.push({ role: "user", content: JSON.stringify(contextEntry) });
+  }
+
+  messages.push({ role: "user", content: JSON.stringify({ instruction }) });
+
+  messages.push({
+    role: "user",
+    content: JSON.stringify(metadata),
+  });
+
+  return messages;
 }
 
 // ── 关键词提取 ──────────────────────────────────────────
@@ -166,17 +278,6 @@ export function analyzeStyle(entries: ListenEntry[]): string {
 
 /**
  * 从 buildSessionProfile 的输出中解析风格行，生成语气指导。
- *
- * 映射规则（基于 style-report 中真人基线校准）：
- * - 短句偏多 → 回复请尽量控制在 20 字以内
- * - 短句适中 → 回复尽量简短
- * - 短句偏少 → 回复可适当展开，但避免长篇大论
- * - 语气词偏多 → 少用语气词（哈/嘛/嗯/哦）
- * - 语气词适中 → 语气自然即可
- * - 语气词偏少 → 保持简洁语气
- * - 问句偏多 → 可适度用问句
- * - 问句适中 → 可适当使用问句
- * - 问句偏少 → 减少问句
  */
 export function styleGuidance(profile: string): string {
   if (!profile.includes("风格：")) return "";
@@ -252,20 +353,26 @@ export function isVagueDescription(desc: string): boolean {
 
 // ── 快速沉默决策 ────────────────────────────────────
 
-/** 对低确定性触发（random/bystander/media），先问模型有没有话想说。
- *  返回 SILENT 或模型生成的简短回复。
- *  continuationHint — 当消息来自 bot 刚回复过的人时传入，模型可据此判断是否为对话延续。 */
+/** 对低确定性触发（random/bystander/media），先问模型有没有话想说。 */
 export async function quickDecideSilence(
-  contextText: string,
+  context: SerializedContextEntry[],
   senderName: string,
   messageText: string,
   scenarioKey: string,
   topicSummary: string,
   atmosphereTag: string,
   continuationHint?: string,
-): Promise<string | null> {
-  const url = `${LLM_BASE_URL.replace(/\/+$/, "")}/chat/completions`;
+): Promise<"SILENT" | "SPEAK" | null> {
+  const quickDecideBaseUrl = process.env.QUICK_DECIDE_BASE_URL || process.env.LLM_BASE_URL || LLM_BASE_URL;
+  const quickDecideModel = process.env.QUICK_DECIDE_MODEL || process.env.LLM_MODEL || LLM_MODEL;
+  const url = `${quickDecideBaseUrl.replace(/\/+$/, "")}/chat/completions`;
   const scenarioPrompt = getScenarioPrompt(scenarioKey, BOT_NAME);
+  const instruction = [
+    "这是低确定性插话判断，不是正常聊天回复。",
+    "如果不值得插话，必须只输出 SILENT。",
+    "只有当你非常确定此刻值得插话时，才允许输出 SPEAK。",
+    "除 SILENT 或 SPEAK 外不要输出任何别的内容。",
+  ].join(" ");
 
   const systemContent = [
     getSystemPrompt(BOT_NAME),
@@ -274,11 +381,16 @@ export async function quickDecideSilence(
     atmosphereTag,
     `\n下面是这个群最近的消息：`,
     `【${scenarioPrompt}】`,
+    instruction,
   ].filter(Boolean).join("\n");
 
   try {
-    const userMsg = getSilenceCheckPrompt(contextText, senderName, messageText) +
-      (continuationHint ? `\n\n${continuationHint}` : "");
+    const userMessages = buildUserMessages({
+      sessionType: "group",
+      context,
+      continuationHint,
+      instruction: "不值得插话就只回复 SILENT；值得插话才回复 SPEAK。",
+    });
     const res = await fetch(url, {
       method: "POST",
       headers: {
@@ -286,15 +398,11 @@ export async function quickDecideSilence(
         "Authorization": `Bearer ${LLM_API_KEY}`,
       },
       body: JSON.stringify({
-        model: LLM_MODEL,
+        model: quickDecideModel,
         messages: [
           { role: "system", content: systemContent },
-          {
-            role: "user",
-            content: userMsg,
-          },
+          ...userMessages,
         ],
-        max_tokens: 60,
         temperature: 0.8,
       }),
     });
@@ -304,7 +412,18 @@ export async function quickDecideSilence(
     const data = (await res.json()) as {
       choices: { message: { content?: string | null } }[];
     };
-    return data.choices?.[0]?.message?.content?.trim() ?? null;
+    const content = data.choices?.[0]?.message?.content?.trim() ?? null;
+    if (!content) return null;
+
+    if (content.toUpperCase() === "SILENT") {
+      return "SILENT";
+    }
+
+    if (content.toUpperCase() === "SPEAK") {
+      return "SPEAK";
+    }
+
+    return "SILENT";
   } catch {
     return null;
   }

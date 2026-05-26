@@ -49,7 +49,7 @@ const testBotQQ = Number(process.env.BOT_QQ || "3042160393");
 // NOTE: 测试文件运行在单进程，模块级 DRY_RUN 取值为 "true"。
 // canReplyReal 的 dryRunOverride 参数用于模拟全局 DRY_RUN=false 场景。
 
-const mod = await import("../../src/agent");
+const mod = await import("../../src/agent/config");
 const {
   DEFAULT_PROBS,
   loadSessionConfig,

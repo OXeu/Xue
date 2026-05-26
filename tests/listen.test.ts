@@ -11,12 +11,12 @@ import { describe, test, expect, beforeAll } from "bun:test";
 
 // 用动态 import 确保环境变量在模块加载前生效。
 // ESM 静态 import 会被提升，无法在导入前设 env。
-let parseMessage: (msg: string | unknown[]) => ReturnType<typeof import("../src/listen").parseMessage>;
+let parseMessage: (msg: string | unknown[]) => ReturnType<typeof import("../src/listen/index").parseMessage>;
 let estimateMsgType: (types: string[], text: string) => string;
 
 beforeAll(async () => {
   process.env.RIN_TEST = "1";
-  const mod = await import("../src/listen");
+  const mod = await import("../src/listen/index");
   parseMessage = mod.parseMessage;
   estimateMsgType = mod.estimateMsgType;
 });

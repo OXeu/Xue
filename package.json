@@ -5,9 +5,8 @@
   "description": "QQ 群聊 agent — 监听群聊/私聊，带视觉理解能力",
   "type": "module",
   "scripts": {
-    "agent": "bun src/agent.ts",
-    "backfill": "bun run scripts/backfill-legacy-phash.ts",
-    "listen": "bun src/listen.ts",
+    "agent": "bun src/agent/main.ts",
+    "listen": "bun src/listen/index.ts",
     "replay": "bun src/replay.ts",
     "simulate": "bun src/simulate.ts",
     "start": "bash scripts/start-listen.sh",

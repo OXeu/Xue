@@ -51,7 +51,7 @@ cp .env.example .env
 # 编辑 .env 填写 LLM_API_KEY、OneBot 连接信息
 
 # 2. 启动监听器（积累上下文数据）
-bun src/listen.ts
+bun src/listen/index.ts
 
 # 3. 先用 simulate 快速评估 prompt 效果（零成本）
 bun run simulate
@@ -61,7 +61,7 @@ LLM_API_KEY=sk-xxx bun run replay
 
 # 4. 启动 agent（处理实时消息并回复）
 bun run start-agent    # 后台持久化
-bun src/agent.ts       # 前台调试
+bun src/agent/main.ts  # 前台调试
 ```
 
 ## 五项核心机制
@@ -221,7 +221,6 @@ LLM_API_KEY=sk-xxx MAX_MSGS=22 bun run replay
 | 命令 | 作用 |
 |------|------|
 | `bun run agent` | 前台运行 agent（含视觉问答循环：`[VISION]` 自主提问） |
-| `bun run backfill` | 一次性回填存量 JSONL 数据：从 CDN 下载旧图片，补全 phash 字段 |
 | `bun run listen` | 前台运行监听器 |
 | `bun run simulate` | 模拟重放（零成本评估 prompt） |
 | `bun run replay` | 重放历史消息并调 LLM（视觉消息使用固定「一句话描述」缓存，非实时问答） |

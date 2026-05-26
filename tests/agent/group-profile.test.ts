@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { buildSessionProfile, styleGuidance } from "../../src/agent";
+import { buildSessionProfile, styleGuidance } from "../../src/chat-utils";
 
 const RAW_DIR = resolve(import.meta.dirname, "../../data/prod/raw");
 

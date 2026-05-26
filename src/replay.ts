@@ -22,22 +22,15 @@
  *   MAX_MSGS               最多处理 N 条消息（从最新往前），默认全部
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { computeDHash } from "./phash";
-import { downloadImage } from "./image-download";
-import { getCachedImage, getCachedImageByUrl, getPhashByUrl } from "./image-cache";
-import { parseAtUsers, stripCqCodes, estimateMsgType } from "./cq-codes";
+import type { ListenEntry } from "./shared/types";
+import { stripCqCodes } from "./cq-codes";
 import {
-  extractKeywords,
-  analyzeAtmosphere,
-  quickDecideSilence,
+  loadRecentMessages,
 } from "./chat-utils";
-import {
-  getSystemPrompt,
-  getScenarioPrompt,
-  getReplyRules,
-} from "./prompts";
+import { runAgentTurn } from "./agent/engine";
+import { __setRawDirForTest } from "./agent/context";
 
 // ── 配置 ────────────────────────────────────────────────
 
@@ -52,101 +45,12 @@ const MAX_MSGS = process.env.MAX_MSGS ? Number(process.env.MAX_MSGS) : Infinity;
 
 const RAW_DIR = resolve(import.meta.dirname, "../data/prod/raw");
 
-/** 临时图片缓存：pHash → base64 + mime */
-const _imageCache = new Map<string, { base64: string; mime: string }>();
+__setRawDirForTest(RAW_DIR);
 
-// ── 类型 ────────────────────────────────────────────────
-
-interface ListenEntry {
-  session: string;
-  msgId: number;
-  time: number;
-  type: string;
-  text: string;
-  userId: number;
-  nickname: string;
-  card?: string;
-  senderRole?: string;
-  subType: string;
-  selfId: number;
-  atUsers: number[];
-  replyTo?: number;
-  segmentTypes?: string[];
-  imageUrls?: string[];
-  phash?: string[];
-}
-
-// ── 工具函数 ────────────────────────────────────────────
-
-function isImageMsg(e: ListenEntry): boolean {
-  return e.type === "image" || (e.segmentTypes?.includes("image") ?? false);
-}
-
-function buildContext(entries: ListenEntry[], replyMap?: Map<number, { sender: string; text: string }>): string {
-  if (entries.length === 0) return "（暂无历史消息）";
-  return entries
-    .map((e) => {
-      const name = e.card || e.nickname;
-      const time = new Date(e.time * 1000).toLocaleTimeString("zh-CN", {
-        hour: "2-digit", minute: "2-digit", timeZone: "Asia/Shanghai",
-      });
-      const at = e.atUsers.length > 0 ? ` @${e.atUsers.join(",")}` : "";
-      const reply = e.replyTo
-        ? (replyMap?.has(e.replyTo)
-            ? ` (回复 ${replyMap.get(e.replyTo)!.sender} "${replyMap.get(e.replyTo)!.text}")`
-            : ` (回复 ${e.replyTo})`)
-        : "";
-      const text = e.text || `[${e.type}]`;
-      const imgMark = e.segmentTypes?.includes("image") ? " [图片]" : "";
-      return `[${time}] ${name}${at}${reply}: ${text}${imgMark}`;
-    })
-    .join("\n");
-}
+// ListenEntry 类型由 shared/types.ts 提供
 
 function ts(): string {
   return new Date().toISOString();
-}
-
-// ── 回复决策 ────────────────────────────────────────────
-
-interface ReplyDecision {
-  should: boolean;
-  reason: string;
-}
-
-function decideReply(
-  userId: number, selfId: number, atUsers: number[],
-  rawText: string, msgType: string,
-): ReplyDecision {
-  // replay 模式下回复所有消息（跳过机器人自己的消息）
-  if (userId === BOT_QQ || selfId === userId) {
-    return { should: false, reason: "self" };
-  }
-  return { should: true, reason: "replay-all" };
-}
-
-function roleInstruction(reason: string): string {
-  const prompt = getScenarioPrompt(reason, BOT_NAME);
-  return prompt ? `【${prompt}】` : `【${getScenarioPrompt("default", BOT_NAME)}】`;
-}
-
-// ── LLM ────────────────────────────────────────────────
-
-async function callLlm(messages: { role: string; content: string }[]): Promise<string> {
-  const res = await fetch(`${LLM_BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${LLM_API_KEY}`,
-    },
-    body: JSON.stringify({ model: LLM_MODEL, messages, max_tokens: 300, temperature: 0.8 }),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`LLM ${res.status}: ${body.slice(0, 200)}`);
-  }
-  const data = (await res.json()) as { choices: { message: { content: string | null } }[] };
-  return data.choices?.[0]?.message?.content?.trim() || "";
 }
 
 // ── 主流程 ──────────────────────────────────────────────
@@ -159,9 +63,10 @@ interface ReplayResult {
   cleanText: string;
   msgType: string;
   atUsers: number[];
-  decision: ReplyDecision;
+  decision: { should: boolean; reason: string };
   reply?: string;
   contextSize: number;
+  displayText?: string;
 }
 
 async function main(): Promise<void> {
@@ -176,13 +81,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const lines = readFileSync(filePath, "utf8").trim().split("\n").filter(Boolean);
-  const allEntries: ListenEntry[] = [];
-  for (const l of lines) {
-    try {
-      allEntries.push(JSON.parse(l) as ListenEntry);
-    } catch { /* skip corrupt lines */ }
-  }
+  const allEntries = loadRecentMessages(RAW_DIR, SESSION, Number.MAX_SAFE_INTEGER) as ListenEntry[];
 
   // 按时间排序
   allEntries.sort((a, b) => a.time - b.time);
@@ -196,18 +95,27 @@ async function main(): Promise<void> {
     const e = toProcess[i];
     const rawMessage = e.text;
     const cleanText = stripCqCodes(rawMessage);
-    const msgType = isImageMsg(e) ? "image" : estimateMsgType(rawMessage);
-    const atUsers = parseAtUsers(rawMessage);
+    const msgType = e.type;
+    const atUsers = e.atUsers;
     const senderName = e.card || e.nickname;
 
-    // 决策
-    const decision = decideReply(e.userId, e.selfId, atUsers, rawMessage, msgType);
-
     // 上下文（这条消息之前的最新消息）
-    const contextEntries = allEntries.slice(
-      Math.max(0, allEntries.indexOf(e) - 30),
-      allEntries.indexOf(e),
-    );
+    const index = allEntries.indexOf(e);
+    const contextEntries = allEntries.slice(Math.max(0, index - 30), index + 1);
+
+    const turn = await runAgentTurn(e as any, {
+      isPrivate: SESSION.startsWith("private_"),
+      rawMessage,
+      contextOverride: {
+        recent: contextEntries,
+        persistedEntry: e,
+      },
+      decisionOverride: e.userId === BOT_QQ || e.selfId === e.userId
+        ? { should: false, reason: "self" }
+        : { should: true, reason: "replay-all" },
+      skipContinuationTracking: true,
+      logger: (msg) => console.log(`[${ts()}] [replay-agent] ${msg}`),
+    });
 
     const result: ReplayResult = {
       index: i,
@@ -217,84 +125,19 @@ async function main(): Promise<void> {
       cleanText,
       msgType,
       atUsers,
-      decision,
+      decision: turn.decision,
       contextSize: contextEntries.length,
+      displayText: turn.displayText,
     };
 
-    // 如果决定回复，做快速沉默检查（附带图片描述，如有）
-    if (decision.should) {
-      const ctxEntries = allEntries.slice(
-        Math.max(0, allEntries.indexOf(e) - 30),
-        allEntries.indexOf(e),
-      );
-      // 构建 replyTo 查找表：msgId → { sender, text }
-      const replyMap = new Map<number, { sender: string; text: string }>();
-      for (const ce of ctxEntries) {
-        if (ce.msgId) {
-          replyMap.set(ce.msgId, {
-            sender: ce.card || ce.nickname,
-            text: (ce.text || "").slice(0, 80),
-          });
-        }
-      }
-      const ctxText = buildContext(ctxEntries, replyMap);
-      const kws = extractKeywords(ctxEntries, 5);
-      const summary = kws.length > 0 ? `当前话题：${kws.join("、")}` : "";
-      const atmosphereTag = analyzeAtmosphere(ctxEntries);
-
-      // 如果是图片消息，下载并缓存（供后续 tool calling 使用），但不预识别
-      let imgPhash: string | null = null;
-      if (isImageMsg(e)) {
-        let downloaded: { base64: string; mime: string } | null = null;
-
-        // 优先用 entry.phash 查找本地缓存
-        if (e.phash?.[0]) {
-          const cached = getCachedImage(e.phash[0]);
-          if (cached) {
-            downloaded = cached;
-            imgPhash = e.phash[0];
-          }
-        }
-
-        // 本地缓存未命中，回退到 CDN URL 下载
-        if (!downloaded) {
-            const imgUrl = e.imageUrls?.[0] ?? null;
-            if (imgUrl) {
-              downloaded = await downloadImage(imgUrl);
-              if (downloaded) {
-                imgPhash = await computeDHash(downloaded.base64, downloaded.mime);
-              }
-            // CDN URL 过期 → 尝试本地缓存（listen.ts 可能已缓存）
-            if (!downloaded) {
-              const cached = getCachedImageByUrl(imgUrl);
-              if (cached) {
-                downloaded = cached;
-                imgPhash = getPhashByUrl(imgUrl);
-              }
-            }
-          }
-        }
-
-        if (downloaded && imgPhash) {
-          _imageCache.set(imgPhash, downloaded);
-        }
-      }
-
-      const displayText = imgPhash
-        ? `${cleanText} [图片#${imgPhash}]`
-        : isImageMsg(e)
-          ? `${cleanText} [图片]`
-          : cleanText;
-
-      const quickReply = await quickDecideSilence(ctxText, senderName, displayText, decision.reason, summary, atmosphereTag);
-      if (!quickReply || quickReply.toUpperCase() === "SILENT") {
+    if (turn.decision.should) {
+      if (!turn.reply) {
         console.log(`[${result.time}] ${result.sender} [silent] ${cleanText.slice(0, 60)}`);
       } else {
-        result.reply = quickReply;
-        console.log(`[${result.time}] ${result.sender} [${decision.reason}]`);
-        console.log(`  触发: ${displayText.slice(0, 60) || "(图片)"}`);
-        console.log(`  回复: ${quickReply.slice(0, 120)}`);
-        console.log(`  话题: ${summary || "(无)"}`);
+        result.reply = turn.reply;
+        console.log(`[${result.time}] ${result.sender} [${turn.decision.reason}]`);
+        console.log(`  触发: ${turn.displayText.slice(0, 60) || "(图片)"}`);
+        console.log(`  回复: ${turn.reply.slice(0, 120)}`);
         console.log();
       }
     }

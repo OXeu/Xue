@@ -20,17 +20,21 @@ beforeAll(() => {
 
 let callVision: (query: string, base64: string, mime: string) => Promise<string | null>;
 let buildContext: (entries: any[], replyMap?: Map<number, { sender: string; text: string }>) => string;
-let computeDHash: (base64: string, mime: string) => Promise<string>;
+let buildStructuredContext: (entries: any[], replyMap?: Map<number, { sender: string; text: string }>) => any[];
+let buildUserMessages: (args: any) => any[];
 let analyzeAtmosphere: (entries: any[]) => string;
+let loadRecentWithPersistedImage: (sessionId: string, msgId: number, expectImage: boolean) => Promise<{ recent: any[]; persistedEntry: any | null }>;
 
 beforeAll(async () => {
-  const mod = await import("../src/agent");
-  callVision = mod.callVision;
-  buildContext = mod.buildContext;
-  analyzeAtmosphere = mod.analyzeAtmosphere;
-  // computeDHash is imported inside agent, we can re-import it directly
-  const phashMod = await import("../src/phash");
-  computeDHash = phashMod.computeDHash;
+  const visionMod = await import("../src/agent/vision");
+  const contextMod = await import("../src/agent/context");
+  const chatMod = await import("../src/chat-utils");
+  callVision = visionMod.callVision;
+  buildContext = contextMod.buildContext;
+  buildStructuredContext = chatMod.buildStructuredContext;
+  buildUserMessages = chatMod.buildUserMessages;
+  analyzeAtmosphere = chatMod.analyzeAtmosphere;
+  loadRecentWithPersistedImage = contextMod.loadRecentWithPersistedImage;
 });
 
 // ── 辅助 ────────────────────────────────────────────────
@@ -196,6 +200,165 @@ describe("callVision", () => {
     } finally {
       process.env.VISION_MODEL = origModel;
     }
+  });
+});
+
+describe("loadRecentWithPersistedImage", () => {
+  test("图片消息首次未落盘 phash 时会短暂等待并重读", async () => {
+    const { mkdirSync, rmSync, writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const { randomBytes } = await import("node:crypto");
+
+    const base = join(tmpdir(), `rin-agent-vision-${randomBytes(4).toString("hex")}`);
+    const rawDir = join(base, "raw");
+    mkdirSync(rawDir, { recursive: true });
+
+    const sessionId = "group_wait_phash";
+    const path = join(rawDir, `${sessionId}.jsonl`);
+    const entryWithoutPhash = {
+      session: sessionId,
+      msgId: 123,
+      time: 1700000000,
+      type: "image",
+      text: "这是什么",
+      userId: 1,
+      nickname: "User",
+      subType: "normal",
+      selfId: 2,
+      atUsers: [],
+      segmentTypes: ["image"],
+    };
+    const entryWithPhash = { ...entryWithoutPhash, phash: ["abcdef1234567890"] };
+
+    writeFileSync(path, JSON.stringify(entryWithoutPhash) + "\n");
+
+    const mod = await import("../src/agent/context");
+    const oldDir = mod.__setRawDirForTest(rawDir);
+
+    const timer = setTimeout(() => {
+      writeFileSync(path, JSON.stringify(entryWithPhash) + "\n");
+    }, 30);
+
+    try {
+      const loaded = await loadRecentWithPersistedImage(sessionId, 123, true);
+      expect(loaded.recent).toHaveLength(1);
+      expect(loaded.recent[0].msgId).toBe(123);
+      expect(loaded.persistedEntry).not.toBeNull();
+      expect(loaded.persistedEntry.phash?.[0]).toBe("abcdef1234567890");
+    } finally {
+      clearTimeout(timer);
+      mod.__setRawDirForTest(oldDir);
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("非图片消息首次未落盘时也会等待直到当前消息进入 recent", async () => {
+    const { mkdirSync, rmSync, writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const { randomBytes } = await import("node:crypto");
+
+    const base = join(tmpdir(), `rin-agent-text-${randomBytes(4).toString("hex")}`);
+    const rawDir = join(base, "raw");
+    mkdirSync(rawDir, { recursive: true });
+
+    const sessionId = "group_wait_text";
+    const path = join(rawDir, `${sessionId}.jsonl`);
+    const oldEntry = {
+      session: sessionId,
+      msgId: 122,
+      time: 1700000000,
+      type: "text",
+      text: "旧消息",
+      userId: 1,
+      nickname: "User",
+      subType: "normal",
+      selfId: 2,
+      atUsers: [],
+      segmentTypes: ["text"],
+    };
+    const currentEntry = {
+      ...oldEntry,
+      msgId: 123,
+      text: "当前消息",
+    };
+
+    writeFileSync(path, JSON.stringify(oldEntry) + "\n");
+
+    const mod = await import("../src/agent/context");
+    const oldDir = mod.__setRawDirForTest(rawDir);
+
+    const timer = setTimeout(() => {
+      writeFileSync(path, `${JSON.stringify(oldEntry)}\n${JSON.stringify(currentEntry)}\n`);
+    }, 30);
+
+    try {
+      const loaded = await loadRecentWithPersistedImage(sessionId, 123, false);
+      expect(loaded.persistedEntry).not.toBeNull();
+      expect(loaded.persistedEntry.msgId).toBe(123);
+      expect(loaded.recent.map((e: any) => e.msgId)).toEqual([122, 123]);
+    } finally {
+      clearTimeout(timer);
+      mod.__setRawDirForTest(oldDir);
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("current message inclusion", () => {
+  test("当前消息未落盘到 recent 时，主链路应补入一次而不重复", async () => {
+    const mod = await import("../src/agent/context");
+    const mergeCurrentEntryIntoRecent = (mod as any).mergeCurrentEntryIntoRecent as (recent: any[], currentEntry: any, persistedEntry: any) => any[];
+
+    const current = {
+      session: "group_1",
+      msgId: 2,
+      time: 1700000001,
+      type: "text",
+      text: "当前消息",
+      userId: 1,
+      nickname: "User",
+      subType: "normal",
+      selfId: 2,
+      atUsers: [],
+      segmentTypes: ["text"],
+    };
+    const recent = [{
+      ...current,
+      msgId: 1,
+      text: "历史消息",
+    }];
+
+    const merged = mergeCurrentEntryIntoRecent(recent, current, null);
+    expect(merged.map((e) => e.msgId)).toEqual([1, 2]);
+  });
+
+  test("当前消息已落盘到 recent 时，主链路不应重复追加", async () => {
+    const mod = await import("../src/agent/context");
+    const mergeCurrentEntryIntoRecent = (mod as any).mergeCurrentEntryIntoRecent as (recent: any[], currentEntry: any, persistedEntry: any) => any[];
+
+    const current = {
+      session: "group_1",
+      msgId: 2,
+      time: 1700000001,
+      type: "text",
+      text: "当前消息",
+      userId: 1,
+      nickname: "User",
+      subType: "normal",
+      selfId: 2,
+      atUsers: [],
+      segmentTypes: ["text"],
+    };
+    const persisted = { ...current, text: "当前消息" };
+    const recent = [
+      { ...current, msgId: 1, text: "历史消息" },
+      persisted,
+    ];
+
+    const merged = mergeCurrentEntryIntoRecent(recent, current, persisted);
+    expect(merged.map((e) => e.msgId)).toEqual([1, 2]);
   });
 });
 
@@ -496,6 +659,95 @@ describe("describe_image tool calling", () => {
     expect(parsed.tools[0].function.name).toBe("describe_image");
   });
 
+  test("tool calling 多轮请求会回传 reasoning_content", async () => {
+    const requests: any[] = [];
+
+    globalThis.fetch = ((url: string | URL | Request, ...args: any[]): Promise<Response> => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+      if (!urlStr.includes("/chat/completions")) {
+        return Promise.resolve(new Response("", { status: 200 }));
+      }
+
+      const opts = args[0] as RequestInit | undefined;
+      const body = typeof opts?.body === "string" ? JSON.parse(opts.body) : null;
+
+      if (body?.model === "gemma4:26b") {
+        return Promise.resolve(new Response(
+          JSON.stringify({ choices: [{ message: { content: "图里是一段维基百科截图" } }] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ));
+      }
+
+      requests.push(body);
+
+      if (requests.length === 1) {
+        return Promise.resolve(new Response(
+          JSON.stringify({
+            choices: [{
+              message: {
+                content: null,
+                reasoning_content: "先看图里具体写了什么。",
+                tool_calls: [{
+                  id: "call_reasoning_1",
+                  type: "function",
+                  function: {
+                    name: "describe_image",
+                    arguments: JSON.stringify({ id: "abc123", question: "这张图片里是什么内容？" }),
+                  },
+                }],
+              },
+            }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ));
+      }
+
+      return Promise.resolve(new Response(
+        JSON.stringify({ choices: [{ message: { content: "看起来像中文维基百科页面" } }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ));
+    }) as typeof globalThis.fetch;
+
+    const messages: any[] = [
+      { role: "system", content: "test system" },
+      { role: "user", content: "test user" },
+    ];
+
+    const first = await (async () => {
+      const res = await fetch("http://127.0.0.1:11444/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages,
+          tools: [{ type: "function", function: { name: "describe_image" } }],
+        }),
+      });
+      return await res.json() as any;
+    })();
+
+    const firstMsg = first.choices[0].message;
+    const tc = firstMsg.tool_calls[0];
+    messages.push({
+      role: "assistant",
+      content: firstMsg.content,
+      tool_calls: firstMsg.tool_calls,
+      reasoning_content: firstMsg.reasoning_content,
+    });
+    messages.push({ role: "tool", tool_call_id: tc.id, content: "图里是一段维基百科截图" });
+
+    await fetch("http://127.0.0.1:11444/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "gpt-4o-mini", messages, tools: [{ type: "function", function: { name: "describe_image" } }] }),
+    });
+
+    expect(requests).toHaveLength(2);
+    const secondAssistant = requests[1].messages.find((m: any) => m.role === "assistant");
+    expect(secondAssistant).toBeDefined();
+    expect(secondAssistant.reasoning_content).toBe("先看图里具体写了什么。");
+  });
+
   test("工具参数解析失败时注入错误消息", async () => {
     // 模拟 LLM 返回非法 JSON 的 arguments
     globalThis.fetch = ((url: string | URL | Request, ...args: any[]): Promise<Response> => {
@@ -572,7 +824,7 @@ describe("describe_image tool calling", () => {
     }
     expect(parseFailed).toBe(true);
 
-    // 验证"参数解析失败"会作为 tool 结果注入
+    // 验证结构化错误提示会作为 tool 结果注入
     const assistantMsg: any = {
       role: "assistant",
       content: null,
@@ -582,10 +834,10 @@ describe("describe_image tool calling", () => {
     messages.push({
       role: "tool",
       tool_call_id: tc.id,
-      content: "参数解析失败",
+      content: "参数错误：请传合法 JSON，对象格式必须是 {\"id\":\"16位小写hex\",\"question\":\"一个具体问题\"}。id 只能填当前消息里 [图片#...] 中 # 后面的 16 位小写 hex，不要带 # 或 [图片#]。",
     });
 
-    const toolMsg = messages.find((m: any) => m.role === "tool" && m.content === "参数解析失败");
+    const toolMsg = messages.find((m: any) => m.role === "tool" && String(m.content).includes("参数错误：请传合法 JSON"));
     expect(toolMsg).toBeDefined();
     expect(toolMsg.tool_call_id).toBe("call_bad_json");
   });
@@ -785,6 +1037,136 @@ describe("buildContext [图片] marker", () => {
   });
 });
 
+describe("structured user message serialization", () => {
+  const baseEntry = {
+    session: "group_1",
+    msgId: 1,
+    time: 1717000000,
+    type: "text",
+    text: "hello world",
+    userId: 100,
+    nickname: "UserA",
+    card: "阿黄",
+    subType: "normal",
+    selfId: 1,
+    atUsers: [],
+    replyTo: undefined,
+    segmentTypes: ["text"],
+  };
+
+  test("buildStructuredContext 将多条历史消息序列化为稳定对象数组", () => {
+    const replyMap = new Map<number, { sender: string; text: string }>();
+    replyMap.set(1, { sender: "阿黄", text: "hello world" });
+
+    const context = buildStructuredContext([
+      { ...baseEntry },
+      {
+        ...baseEntry,
+        msgId: 2,
+        type: "mixed",
+        text: "看看这个",
+        segmentTypes: ["text", "image"],
+        phash: ["abcdef1234567890"],
+        atUsers: [3042160393],
+        replyTo: 1,
+      },
+    ], replyMap);
+
+    expect(context).toHaveLength(2);
+
+    const expectedTime = new Date(baseEntry.time * 1000).toLocaleTimeString("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "Asia/Shanghai",
+    });
+
+    expect(context[0]).toEqual({
+      msg_id: 1,
+      time: expectedTime,
+      sender: "阿黄",
+      type: "text",
+      text: "hello world",
+    });
+
+    expect(context[1]).toEqual({
+      msg_id: 2,
+      time: expectedTime,
+      sender: "阿黄",
+      mentions: [3042160393],
+      mentioned_bot: true,
+      reply_to: { msg_id: 1, sender: "阿黄", text: "hello world" },
+      type: "mixed",
+      text: "看看这个",
+      has_image: true,
+      image_phash: "abcdef1234567890",
+      is_latest: true,
+    });
+  });
+
+  test("buildStructuredContext 对纯图片空文本消息写入 msg_id 且 text 为 [图片]", () => {
+    const context = buildStructuredContext([{
+      ...baseEntry,
+      msgId: 3,
+      type: "image",
+      text: "",
+      segmentTypes: ["image"],
+      phash: ["0011223344556677"],
+    }]);
+
+    expect(context[0]).toEqual({
+      msg_id: 3,
+      time: new Date(baseEntry.time * 1000).toLocaleTimeString("zh-CN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZone: "Asia/Shanghai",
+      }),
+      sender: "阿黄",
+      type: "image",
+      text: "[图片]",
+      has_image: true,
+      image_phash: "0011223344556677",
+      is_latest: true,
+    });
+  });
+
+  test("buildUserMessages 生成平铺的多条 user JSON 消息", () => {
+    const messages = buildUserMessages({
+      sessionType: "group",
+      context: [
+        { time: "15:06", sender: "阿黄", type: "text", text: "hello world" },
+        { time: "15:07", sender: "我是铸币", type: "image", text: "早上好", mentions: [3042160393], has_image: true, image_phash: "21194165415303e0" },
+      ],
+      continuationHint: "你刚才回复过对方",
+    });
+
+    expect(messages).toHaveLength(4);
+    expect(messages).toEqual([
+      {
+        role: "user",
+        content: JSON.stringify({ time: "15:06", sender: "阿黄", type: "text", text: "hello world" }),
+      },
+      {
+        role: "user",
+        content: JSON.stringify({ time: "15:07", sender: "我是铸币", type: "image", text: "早上好", mentions: [3042160393], has_image: true, image_phash: "21194165415303e0" }),
+      },
+      {
+        role: "user",
+        content: JSON.stringify({ instruction: "想回复就直接说，觉得没什么可说的就保持沉默。" }),
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          session_type: "group",
+          bot_user_id: 3042160393,
+          bot_name: "Rin",
+          latest_message_rule: "context 中最后一条 is_latest=true 的消息就是当前待回复消息，回复时优先围绕它，而不是更早的消息。",
+          continuation_hint: "你刚才回复过对方",
+        }),
+      },
+    ]);
+  });
+});
+
 // ── isVagueDescription ──────────────────────────────────
 
 describe("isVagueDescription", () => {
@@ -903,7 +1285,7 @@ describe("quickDecideSilence end-to-end (agent.ts)", () => {
   ) => Promise<string | null>;
 
   beforeAll(async () => {
-    const mod = await import("../src/agent");
+    const mod = await import("../src/chat-utils");
     quickDecideSilence = mod.quickDecideSilence;
   });
 
@@ -922,11 +1304,14 @@ describe("quickDecideSilence end-to-end (agent.ts)", () => {
     }) as typeof globalThis.fetch;
   }
 
-  const dummyContext = "[12:00] Alice: 大家好\n[12:01] Bob: 今天天气不错";
+  const dummyContext = [
+    { time: "12:00", sender: "Alice", type: "text", text: "大家好" },
+    { time: "12:01", sender: "Bob", type: "text", text: "今天天气不错" },
+  ];
   const dummySender = "Charlie";
   const dummySummary = "当前话题：天气";
   const dummyAtmosphere = "气氛：正常";
-  const imageDesc = "（图片描述：A photo of a white cat sleeping on a red sofa, relaxed atmosphere.）";
+  const imageDesc = "A photo of a white cat sleeping on a red sofa, relaxed atmosphere.";
 
   // ── Test 1: LLM 返回 SILENT ──────────────────────────
 
@@ -944,8 +1329,8 @@ describe("quickDecideSilence end-to-end (agent.ts)", () => {
 
   // ── Test 2: LLM 返回非 SILENT ────────────────────────
 
-  test("有图片描述 + LLM 返回回复 → 函数返回该回复文本", async () => {
-    mockLlm("好可爱的猫，想摸摸");
+  test("有图片描述 + LLM 返回 SPEAK → 函数返回 'SPEAK'", async () => {
+    mockLlm("SPEAK");
 
     const result = await quickDecideSilence(
       dummyContext, dummySender, imageDesc, "bystander", dummySummary, dummyAtmosphere,
@@ -953,7 +1338,17 @@ describe("quickDecideSilence end-to-end (agent.ts)", () => {
 
     expect(result).not.toBeNull();
     expect(result!.toUpperCase()).not.toBe("SILENT");
-    expect(result).toBe("好可爱的猫，想摸摸");
+    expect(result).toBe("SPEAK");
+  });
+
+  test("思考模型若输出非协议文本 → 被压成 SILENT", async () => {
+    mockLlm("我觉得这时候可以回一句，猫看起来很可爱。");
+
+    const result = await quickDecideSilence(
+      dummyContext, dummySender, imageDesc, "random", dummySummary, dummyAtmosphere,
+    );
+
+    expect(result).toBe("SILENT");
   });
 
   // ── Test 3: 无图片（仅文本）→ 原有行为不变 ─────────
@@ -984,7 +1379,7 @@ describe("quickDecideSilence end-to-end (agent.ts)", () => {
 
   // ── Test 5: 验证请求体包含图片描述 ─────────────────
 
-  test("传入图片描述时请求体中包含描述文本", async () => {
+  test("传入图片描述时请求体中包含结构化消息字段", async () => {
     let capturedBody: string | null = null;
 
     globalThis.fetch = ((url: string | URL | Request, ...args: any[]): Promise<Response> => {
@@ -1004,16 +1399,79 @@ describe("quickDecideSilence end-to-end (agent.ts)", () => {
       dummyContext, dummySender, imageDesc, "random", dummySummary, dummyAtmosphere,
     );
 
-    // 验证请求体包含了图片描述
+    // 验证请求体包含结构化 JSON 内容
     expect(capturedBody).not.toBeNull();
     const body = JSON.parse(capturedBody!);
-    const userMessage = body.messages.find((m: any) => m.role === "user");
-    expect(userMessage).toBeDefined();
-    // userMessage 的 content 是由 getSilenceCheckPrompt 构造的，
-    // 应包含传入的 messageText（带图片描述）
-    expect(userMessage.content).toContain(imageDesc);
-    expect(userMessage.content).toContain("white cat sleeping");
-    expect(userMessage.content).toContain("relaxed atmosphere");
+    const userMessages = body.messages.filter((m: any) => m.role === "user");
+    expect(userMessages).toHaveLength(4);
+    expect(JSON.parse(userMessages[0].content)).toEqual(dummyContext[0]);
+    expect(JSON.parse(userMessages[1].content)).toEqual(dummyContext[1]);
+    expect(JSON.parse(userMessages[2].content)).toEqual({ instruction: "不值得插话就只回复 SILENT；值得插话才回复 SPEAK。" });
+    expect(JSON.parse(userMessages[3].content)).toEqual({
+      session_type: "group",
+      bot_user_id: 3042160393,
+      bot_name: "Rin",
+      latest_message_rule: "context 中最后一条 is_latest=true 的消息就是当前待回复消息，回复时优先围绕它，而不是更早的消息。",
+    });
+  });
+
+  test("quickDecideSilence 优先使用 QUICK_DECIDE_MODEL", async () => {
+    let capturedBody: string | null = null;
+    const oldQuickModel = process.env.QUICK_DECIDE_MODEL;
+    const oldLlmModel = process.env.LLM_MODEL;
+
+    process.env.QUICK_DECIDE_MODEL = "gpt-4o-mini";
+    process.env.LLM_MODEL = "deepseek-reasoner";
+
+    globalThis.fetch = ((url: string | URL | Request, ...args: any[]): Promise<Response> => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+      if (urlStr.includes("/chat/completions")) {
+        const opts = args[0] as RequestInit | undefined;
+        capturedBody = typeof opts?.body === "string" ? opts.body : null;
+        return Promise.resolve(new Response(
+          JSON.stringify({ choices: [{ message: { content: "SILENT" } }] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ));
+      }
+      return Promise.resolve(new Response("", { status: 404 }));
+    }) as typeof globalThis.fetch;
+
+    try {
+      await quickDecideSilence(
+        dummyContext, dummySender, imageDesc, "random", dummySummary, dummyAtmosphere,
+      );
+
+      expect(capturedBody).not.toBeNull();
+      const body = JSON.parse(capturedBody!);
+      expect(body.model).toBe("gpt-4o-mini");
+    } finally {
+      if (oldQuickModel === undefined) delete process.env.QUICK_DECIDE_MODEL;
+      else process.env.QUICK_DECIDE_MODEL = oldQuickModel;
+
+      if (oldLlmModel === undefined) delete process.env.LLM_MODEL;
+      else process.env.LLM_MODEL = oldLlmModel;
+    }
+  });
+
+  test("最新消息应包含在 context 中，而不是作为额外一条 current message 追加", () => {
+    const messages = buildUserMessages({
+      sessionType: "group",
+      context: [
+        { time: "12:00", sender: "Alice", type: "text", text: "大家好" },
+        { time: "12:02", sender: dummySender, type: "text", text: imageDesc, is_latest: true },
+      ],
+      instruction: "不值得插话就只回复 SILENT；值得插话才回复 SPEAK。",
+    });
+
+    expect(messages).toHaveLength(4);
+    expect(JSON.parse(messages[1].content)).toEqual({
+      time: "12:02",
+      sender: dummySender,
+      type: "text",
+      text: imageDesc,
+      is_latest: true,
+    });
+    expect(JSON.parse(messages[2].content)).toEqual({ instruction: "不值得插话就只回复 SILENT；值得插话才回复 SPEAK。" });
   });
 
   // ── Test 6: LLM 返回 null/failure 时函数返回 null ───

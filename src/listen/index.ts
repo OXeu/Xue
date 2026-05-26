@@ -1,11 +1,17 @@
 /**
- * listen.ts — OneBot 正向 WebSocket 群聊监听器。
+ * listen/index.ts — OneBot 正向 WebSocket 群聊监听器（重构版）
  *
- * 只收不发。收到消息后按会话写入 JSONL 到 data/prod/raw/，
- * 用于后续分析群聊风格基线。
+ * 唯一连接 OneBot WebSocket 的进程。
+ * 收到消息后：
+ *   1. 解析消息
+ *   2. 下载图片、计算 phash（顺序队列，保证落盘顺序）
+ *   3. 写入 raw JSONL (data/prod/raw/)
+ *   4. 通过本地 Unix Socket 推送处理后事件给 agent
  *
- * 用法:  ONEBOT_WS_URL=ws://localhost:6700 bun run src/listen.ts
- *        DURATION_SECONDS=300 bun run src/listen.ts   # 5 分钟后自动退出
+ * agent 不再直接连接 OneBot。
+ *
+ * 用法:
+ *   ONEBOT_WS_URL=ws://localhost:6700 bun run src/listen/index.ts
  *
  * 环境变量:
  *   ONEBOT_WS_URL        OneBot 网关地址（默认 ws://localhost:6700）
@@ -13,10 +19,12 @@
  *   DURATION_SECONDS     运行指定秒数后自动退出（不设则持续运行）
  */
 
-import { appendFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { saveCachedImage, saveUrlIndex } from "./image-cache";
-import { computeDHash } from "./phash";
+import type { ListenEntry } from "../shared/types";
+import { EVENTS_SOCKET_PATH, sendEvent } from "../shared/events";
+import { saveCachedImage } from "../image-cache";
+import { computeDHashFromBuffer } from "../phash";
 
 // ── 类型 ────────────────────────────────────────────────
 
@@ -46,52 +54,21 @@ interface MessageSegment {
   data: Record<string, unknown>;
 }
 
-/** 解析后的消息记录，写入 JSONL 的一行。 */
-interface ListenEntry {
-  /** 会话标识: group_{id} 或 private_{id}。 */
-  session: string;
-  /** 消息 ID。 */
-  msgId: number;
-  /** 时间戳（秒）。 */
-  time: number;
-  /** 消息类型: text / at / image / reply / … */
-  type: string;
-  /** 纯文本内容（strip 掉 at/reply 标记后的正文）。 */
+/** 解析后的消息元数据（仅用于内部处理，不入 JSONL）。 */
+interface ParsedMessage {
   text: string;
-  /** 发送者 QQ。 */
-  userId: number;
-  /** 发送者昵称。 */
-  nickname: string;
-  /** 发送者群名片（如有）。 */
-  card?: string;
-  /** 发送者群角色（owner / admin / member）。 */
-  senderRole?: string;
-  /** 消息子类型（friend / group / normal / anonymous 等）。 */
-  subType: string;
-  /** 收到此消息的 bot QQ。 */
-  selfId: number;
-  /** @ 了哪些 QQ（数组）。 */
   atUsers: number[];
-  /** 回复引用的消息 ID（如有）。 */
+  atAll: boolean;
   replyTo?: number;
-  /** 原始消息段类型分布（脱敏摘要）。 */
   segmentTypes: string[];
-  /** 图片 URL 列表（如有）。 */
-  imageUrls?: string[];
-  /** 图片 pHash 值列表（与 imageUrls 一一对应），用于 replay 时查找本地缓存。 */
-  phash?: string[];
-  /** 原始 CQ 码（未剥离的 raw_message 字段）。 */
-  raw_message: string;
-  /** 完整消息段数组（OneBot 数组格式，保留原始数据）。 */
-  segments: MessageSegment[];
+  imageUrls: string[];
 }
 
 // ── 路径 ────────────────────────────────────────────────
 
-const DATA_DIR = resolve(import.meta.dirname, "../data/prod/raw");
-
-function ensureDataDir(): void {
-  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+const DATA_DIR = resolve(import.meta.dirname, "../../data/prod/raw");
+function ensureDir(dir: string): void {
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 }
 
 function sessionLogPath(sessionId: string): string {
@@ -108,6 +85,7 @@ function sessionLogPath(sessionId: string): string {
 export function parseMessage(message: string | unknown[]): {
   text: string;
   atUsers: number[];
+  atAll: boolean;
   replyTo?: number;
   segmentTypes: string[];
   imageUrls: string[];
@@ -115,6 +93,7 @@ export function parseMessage(message: string | unknown[]): {
   const result = {
     text: "",
     atUsers: [] as number[],
+    atAll: false,
     replyTo: undefined as number | undefined,
     segmentTypes: [] as string[],
     imageUrls: [] as string[],
@@ -122,25 +101,25 @@ export function parseMessage(message: string | unknown[]): {
 
   // string 格式：从 CQ 码中解析 at / reply，剥离 CQ 码后得到纯文本
   if (typeof message === "string") {
-    // 提取回复引用
     const replyMatch = message.match(/\[CQ:reply,id=(\d+)\]/);
     if (replyMatch) result.replyTo = Number(replyMatch[1]);
-    // 提取 @ 列表
+
     const atRe = /\[CQ:at,qq=(\d+)\]/g;
     let m: RegExpExecArray | null;
     while ((m = atRe.exec(message)) !== null) {
       result.atUsers.push(Number(m[1]));
     }
-    // 提取图片 URL
+
+    result.atAll = /\[CQ:at,qq=all\]/.test(message);
+
     const imgRe = /\[CQ:image,([^\]]*)\]/g;
     while ((m = imgRe.exec(message)) !== null) {
       const urlMatch = m[1].match(/url=([^,]*)/);
       if (urlMatch) result.imageUrls.push(decodeURIComponent(urlMatch[1]));
     }
-    // 收集段类型
+
     const cqTypes = [...message.matchAll(/\[CQ:(\w+),/g)].map((x) => x[1]);
     result.segmentTypes = cqTypes.length > 0 ? cqTypes : ["text"];
-    // 剥离所有 CQ 码得到纯文本
     result.text = message.replace(/\[CQ:[^\]]*\]/g, "").trim();
     return result;
   }
@@ -157,7 +136,9 @@ export function parseMessage(message: string | unknown[]): {
         result.text += seg.data?.text ?? "";
         break;
       case "at":
-        if (seg.data?.qq && seg.data.qq !== "all") {
+        if (seg.data?.qq === "all") {
+          result.atAll = true;
+        } else if (seg.data?.qq) {
           result.atUsers.push(Number(seg.data.qq));
         }
         break;
@@ -171,7 +152,6 @@ export function parseMessage(message: string | unknown[]): {
           result.imageUrls.push(String(seg.data.url));
         }
         break;
-      // face / forward / mface / … — 只记录类型，不提取内容
     }
   }
 
@@ -179,8 +159,7 @@ export function parseMessage(message: string | unknown[]): {
   return result;
 }
 
-/** 估算消息的"类型"：纯文本、表情为主、图片为主、混合。
- *  导出供单元测试使用。 */
+/** 估算消息的类型。导出供单元测试使用。 */
 export function estimateMsgType(segmentTypes: string[], text: string): string {
   if (segmentTypes.length === 0) return "unknown";
   if (segmentTypes.every((t) => t === "text")) return "text";
@@ -190,18 +169,9 @@ export function estimateMsgType(segmentTypes: string[], text: string): string {
   return "mixed";
 }
 
-/** 将 message 字段统一转为数组格式（string 格式转成单段 text）。 */
-function normalizeSegments(message: string | unknown[]): MessageSegment[] {
-  if (typeof message === "string") {
-    return [{ type: "text", data: { text: message } }];
-  }
-  if (!Array.isArray(message)) return [];
-  return message as MessageSegment[];
-}
-
 // ── 写日志 ──────────────────────────────────────────────
 
-function writeEntry(entry: ListenEntry): void {
+function writeEntryRaw(entry: ListenEntry): void {
   const line = JSON.stringify(entry) + "\n";
   appendFileSync(sessionLogPath(entry.session), line, "utf8");
 }
@@ -214,25 +184,67 @@ function ts(): string {
 
 // ── 图片缓存 ────────────────────────────────────────────
 
-/** 下载图片到本地缓存（不阻塞消息处理），以 phash 为文件名。
+/** 下载图片到本地缓存，以 phash 为文件名。
  *  同一张图片无论出现在哪个消息中，只存一份（phash 去重）。
  *  返回 phash（下载失败时返回 null）。
  *  导出供测试使用。 */
-export async function cacheEntryImage(url: string, _session: string, _msgId: number): Promise<string | null> {
+export async function cacheEntryImage(url: string): Promise<string | null> {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
     if (!res.ok) return null;
     const buf = await res.arrayBuffer();
+    if (!buf || buf.byteLength === 0) return null;
+    const buffer = Buffer.from(buf);
     const mime = res.headers.get("content-type") || "image/jpeg";
-    const base64 = Buffer.from(buf).toString("base64");
-    const phash = await computeDHash(base64, mime);
+    const base64 = buffer.toString("base64");
+    const phash = await computeDHashFromBuffer(buffer);
     saveCachedImage(phash, base64, mime);
-    saveUrlIndex(url, phash);
     console.log(`[${ts()}] [cache] cached image phash=${phash}`);
     return phash;
   } catch {
     return null;
   }
+}
+
+// ── 顺序处理队列 ────────────────────────────────────────
+
+/**
+ * 顺序处理队列，确保图片消息下载 → phash → 落盘按到达顺序执行。
+ * 后续消息需等待前一条处理完成。
+ */
+let processQueue: Promise<void> = Promise.resolve();
+
+/** 将一条消息加入顺序处理队列。 */
+function enqueueProcess(entry: ListenEntry, imageUrls: string[]): void {
+  processQueue = processQueue.then(async () => {
+    try {
+      // 下载图片、计算 phash
+      if (imageUrls.length > 0) {
+        const phashes: string[] = [];
+        for (const url of imageUrls) {
+          const phash = await cacheEntryImage(url);
+          if (phash) phashes.push(phash);
+        }
+        if (phashes.length > 0) entry.phash = phashes;
+      }
+
+      // 写入 raw JSONL
+      ensureDir(DATA_DIR);
+      writeEntryRaw(entry);
+
+      // 推送实时事件给 agent（agent 未启动时静默失败）
+      await sendEvent(entry);
+
+      console.log(`[${ts()}] [${entry.session}] <${entry.nickname}>: ${entry.text.slice(0, 120)}`);
+    } catch (err) {
+      console.error(`[${ts()}] [queue] error processing entry: ${err instanceof Error ? err.message : String(err)}`);
+      // 即使处理失败也尝试写入
+      try {
+        ensureDir(DATA_DIR);
+        writeEntryRaw(entry);
+      } catch {}
+    }
+  });
 }
 
 // ── 连接与重连 ──────────────────────────────────────────
@@ -250,7 +262,6 @@ function scheduleReconnect(wsUrl: string, accessToken: string): void {
 }
 
 function connect(wsUrl: string, accessToken: string): void {
-  // 清理旧连接及其监听器，避免嵌套重连
   if (ws) {
     try {
       ws.onopen = null;
@@ -262,7 +273,6 @@ function connect(wsUrl: string, accessToken: string): void {
     ws = null;
   }
 
-  // 将 token 注入 URL query 参数（OneBot 标准鉴权方式）
   const finalUrl = accessToken
     ? (() => {
         const u = new URL(wsUrl);
@@ -277,10 +287,10 @@ function connect(wsUrl: string, accessToken: string): void {
 
   ws.onopen = () => {
     console.log(`[${ts()}] connected to ${finalUrl}`);
-    reconnectDelay = 1_000; // 连接成功，重置退避
+    reconnectDelay = 1_000;
   };
 
-  ws.onmessage = async (event: MessageEvent) => {
+  ws.onmessage = (event: MessageEvent) => {
     const raw = typeof event.data === "string"
       ? event.data
       : Buffer.from(event.data).toString();
@@ -302,37 +312,38 @@ function connect(wsUrl: string, accessToken: string): void {
     const parsed = parseMessage(data.message);
 
     // 如果 raw_message 不含图片 CQ 码但 message 是数组格式且有图片段，
-    // 补一条合成 CQ 码，确保 JSONL 中记录完整图片信息，下游 replay 可查。
-    if (!/\[CQ:image/.test(data.raw_message) && Array.isArray(data.message)) {
+    // 补一条合成 raw_message，让图片 URL 被 parseMessage 提取到。
+    let rawMessage = data.raw_message;
+    if (!/\[CQ:image/.test(rawMessage) && Array.isArray(data.message)) {
       for (const seg of data.message as Array<{ type?: string; data?: Record<string, unknown> }>) {
         if (seg?.type === "image" && typeof seg.data?.url === "string") {
-          data.raw_message += `[CQ:image,url=${seg.data.url}]`;
+          rawMessage += `[CQ:image,url=${seg.data.url}]`;
           break;
         }
       }
     }
 
+    // 重新解析以获取完整 imageUrls（如果 raw_message 被补充了）
+    const fullParsed = rawMessage !== data.raw_message ? parseMessage(rawMessage) : parsed;
+
     const entry: ListenEntry = {
       session: sessionId,
       msgId: data.message_id,
       time: data.time,
-      type: estimateMsgType(parsed.segmentTypes, parsed.text),
-      text: parsed.text,
+      type: estimateMsgType(fullParsed.segmentTypes, fullParsed.text),
+      text: fullParsed.text,
       userId: data.user_id,
       nickname: data.sender.nickname,
       card: data.sender.card,
       senderRole: data.sender.role,
       subType: data.sub_type,
       selfId: data.self_id,
-      atUsers: parsed.atUsers,
-      replyTo: parsed.replyTo,
-      segmentTypes: parsed.segmentTypes,
-      raw_message: data.raw_message,
-      segments: normalizeSegments(data.message),
+      atUsers: fullParsed.atUsers,
+      atAll: fullParsed.atAll || undefined,
+      replyTo: fullParsed.replyTo,
+      segmentTypes: fullParsed.segmentTypes,
+      // phash 在 enqueueProcess 中填充
     };
-    if (parsed.imageUrls.length > 0) {
-      entry.imageUrls = parsed.imageUrls;
-    }
 
     // 控制台日志（精简）
     const atInfo = entry.atUsers.length > 0 ? ` @[${entry.atUsers.join(",")}]` : "";
@@ -341,29 +352,17 @@ function connect(wsUrl: string, accessToken: string): void {
       `[${ts()}] [${sessionId}] <${entry.nickname}>${atInfo}${replyInfo}: ${entry.text.slice(0, 120)}`,
     );
 
-    // 写入消息前先下载图片、计算 phash，存入 entry 供 replay 时定位本地缓存
-    if (entry.imageUrls && entry.imageUrls.length > 0) {
-      const phashes: string[] = [];
-      for (const url of entry.imageUrls) {
-        const phash = await cacheEntryImage(url, entry.session, entry.msgId);
-        if (phash) phashes.push(phash);
-      }
-      if (phashes.length > 0) entry.phash = phashes;
-    }
-
-    writeEntry(entry);
+    // 加入顺序处理队列（下载 + phash + 落盘）
+    enqueueProcess(entry, fullParsed.imageUrls);
   };
 
   ws.onclose = (event: CloseEvent) => {
     console.log(`[${ts()}] disconnected (code=${event.code})`);
     console.error(`[${ts()}] disconnected (code=${event.code})`);
-    // 指数退避重连（初始 1s，最大 30s）
     scheduleReconnect(wsUrl, accessToken);
   };
 
-  ws.onerror = () => {
-    // onerror 后必然触发 onclose，不在 error 里重连避免双重触发
-  };
+  ws.onerror = () => {};
 }
 
 // ── 主流程 ──────────────────────────────────────────────
@@ -372,14 +371,13 @@ function main(): void {
   const wsUrl = process.env.ONEBOT_WS_URL || "ws://localhost:6700";
   const accessToken = process.env.ONEBOT_ACCESS_TOKEN || "";
 
-  ensureDataDir();
-
+  ensureDir(DATA_DIR);
   console.log(`[${ts()}] listen starting`);
   console.log(`[${ts()}] data dir: ${DATA_DIR}`);
+  console.log(`[${ts()}] agent ipc socket: ${EVENTS_SOCKET_PATH}`);
 
   connect(wsUrl, accessToken);
 
-  // 支持 DURATION_SECONDS 自动退出
   const duration = process.env.DURATION_SECONDS;
   if (duration) {
     const secs = Number(duration);
@@ -394,7 +392,6 @@ function main(): void {
     }
   }
 
-  // 心跳日志：每 5 分钟输出状态到 stderr
   const startTime = Date.now();
   setInterval(() => {
     const elapsed = Math.floor((Date.now() - startTime) / 1000);
@@ -405,7 +402,6 @@ function main(): void {
     console.error(`[${ts()}] [heartbeat] running, ${elapsed}s elapsed, ${fileCount} files in data/prod/raw/`);
   }, 300_000);
 
-  // 保持进程运行
   process.on("SIGINT", () => {
     console.log(`\n[${ts()}] shutting down ...`);
     if (reconnectTimer) clearTimeout(reconnectTimer);

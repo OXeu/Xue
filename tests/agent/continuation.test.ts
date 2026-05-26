@@ -12,7 +12,7 @@
 
 import { describe, test, expect, beforeEach } from "bun:test";
 
-const mod = await import("../../src/agent");
+const mod = await import("../../src/agent/engine");
 const {
   isConversationContinuation,
   setLastBotReply,
