@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "rin-research-humanize",
+      "name": "xue",
       "dependencies": {
         "sharp": "^0.34.5",
       },
