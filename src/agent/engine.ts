@@ -146,6 +146,36 @@ function log(msg: string): void {
   console.error(`[${ts()}] [agent] ${msg}`);
 }
 
+const SILENCE_REPLY_MARKERS = /沉默|保持沉默|不回复|不回|不说话|不吭声|没说话|无话可说|不接话|静默|无需回复|先不说|先不回|silent|silence|no reply/i;
+const FAKE_INTEREST_TAIL_RE = /(?:[\s，,。；;、~～]*)蹲(?:个|一个|一下|一手|一波)?(?:价|价格|路子|链接|店|车|券|优惠|后续|攻略|教程|作业|配置|名单|瓜|repo|仓库|码|群|推荐|渠道|办法|方法|答案|结果|进展)(?:吧|了|啊)?(?:[\s。.!！?？~～]*)$/i;
+
+/** 将模型用来表示“沉默”的占位文本转换为真正的不发送。 */
+export function sanitizeAssistantReply(content: string | null | undefined): string | null {
+  if (!content) return null;
+
+  const trimmed = content.trim();
+  if (!trimmed) return null;
+
+  const unquoted = trimmed.replace(/^[`"'“”‘’]+|[`"'“”‘’]+$/g, "").trim();
+  const compact = unquoted.replace(/[\s。.!！]+/g, "").toLowerCase();
+  if (["silent", "silence", "noreply", "沉默", "保持沉默", "不回复", "不回", "不说话", "无话可说", "不接话", "静默"].includes(compact)) {
+    return null;
+  }
+
+  const parenthetical = unquoted.match(/^[（(【\[{<《]\s*([\s\S]*?)\s*[）)】\]}>》]$/);
+  if (parenthetical && SILENCE_REPLY_MARKERS.test(parenthetical[1] ?? "")) {
+    return null;
+  }
+
+  const withoutFakeInterest = unquoted
+    .replace(FAKE_INTEREST_TAIL_RE, "")
+    .replace(/[，,；;、\s]+$/g, "")
+    .trim();
+  if (!withoutFakeInterest) return null;
+
+  return withoutFakeInterest;
+}
+
 // ── ReplyDecision ──────────────────────────────────────
 
 interface ReplyDecision {
@@ -341,7 +371,12 @@ export async function runAgentTurn(entry: ListenEntry, options: RunAgentTurnOpti
           }
         }
       } else if (result.content) {
-        finalReply = result.content;
+        const sanitizedReply = sanitizeAssistantReply(result.content);
+        if (!sanitizedReply) {
+          logger("silent (model output silence placeholder)");
+          break;
+        }
+        finalReply = sanitizedReply;
       } else {
         break;
       }
