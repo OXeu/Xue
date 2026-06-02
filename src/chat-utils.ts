@@ -39,6 +39,7 @@ interface SerializedContextEntry {
   msg_id: number;
   time: string;
   sender: string;
+  is_self?: boolean;
   mentions?: number[];
   mentioned_bot?: boolean;
   reply_to?: {
@@ -60,6 +61,9 @@ interface SerializedUserMessage {
   instruction?: string;
   continuation_hint?: string;
   latest_message_rule?: string;
+  latest_message?: Pick<SerializedContextEntry, "msg_id" | "time" | "sender" | "type" | "text" | "has_image" | "image_phash" | "reply_to">;
+  recent_self_messages?: Array<Pick<SerializedContextEntry, "msg_id" | "time" | "text">>;
+  self_history_rule?: string;
 }
 
 interface ChatMessage {
@@ -81,6 +85,7 @@ function serializeContextEntry(
 ): SerializedContextEntry {
   const hasImage = entry.segmentTypes?.includes("image") ?? false;
   const fallbackText = hasImage ? "[图片]" : `[${entry.type}]`;
+  const botUserId = Number(process.env.BOT_QQ || "3042160393");
   const serialized: SerializedContextEntry = {
     msg_id: entry.msgId,
     time: formatEntryTime(entry.time),
@@ -89,9 +94,13 @@ function serializeContextEntry(
     text: entry.text || fallbackText,
   };
 
+  if (entry.userId === botUserId) {
+    serialized.is_self = true;
+  }
+
   if (entry.atUsers.length > 0) {
     serialized.mentions = entry.atUsers;
-    if (entry.atUsers.includes(Number(process.env.BOT_QQ || "3042160393"))) {
+    if (entry.atUsers.includes(botUserId)) {
       serialized.mentioned_bot = true;
     }
   }
@@ -130,12 +139,42 @@ export function buildUserMessages(args: {
   continuationHint?: string;
   instruction?: string;
 }): ChatMessage[] {
+  const botUserId = Number(process.env.BOT_QQ || "3042160393");
+  const latestMessage = args.context.findLast((entry) => entry.is_latest) ?? args.context.at(-1);
+  const recentSelfMessages = args.context
+    .filter((entry) => !entry.is_latest)
+    .filter((entry) => entry.is_self === true)
+    .slice(-3)
+    .map((entry) => ({
+      msg_id: entry.msg_id,
+      time: entry.time,
+      text: entry.text,
+    }));
+
   const metadata: SerializedUserMessage = {
     session_type: args.sessionType,
-    bot_user_id: Number(process.env.BOT_QQ || "3042160393"),
+    bot_user_id: botUserId,
     bot_name: BOT_NAME,
-    latest_message_rule: "context 中最后一条 is_latest=true 的消息就是当前待回复消息，回复时优先围绕它，而不是更早的消息。",
+    latest_message_rule: "latest_message 是当前待回复消息；它也在前面的 context 中以 is_latest=true 标记。回复时优先围绕 latest_message，而不是更早的消息。",
   };
+
+  if (latestMessage) {
+    metadata.latest_message = {
+      msg_id: latestMessage.msg_id,
+      time: latestMessage.time,
+      sender: latestMessage.sender,
+      type: latestMessage.type,
+      text: latestMessage.text,
+      has_image: latestMessage.has_image,
+      image_phash: latestMessage.image_phash,
+      reply_to: latestMessage.reply_to,
+    };
+  }
+
+  if (recentSelfMessages.length > 0) {
+    metadata.recent_self_messages = recentSelfMessages;
+    metadata.self_history_rule = "recent_self_messages 是你自己刚才在这个会话里说过的话。回复前先看它，避免连续重复“草/笑死/乐/？”这类空反应；如果只能重复这种短反应，就保持沉默。";
+  }
 
   if (args.continuationHint) {
     metadata.continuation_hint = args.continuationHint;

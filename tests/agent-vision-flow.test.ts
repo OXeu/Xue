@@ -1129,6 +1129,25 @@ describe("structured user message serialization", () => {
     });
   });
 
+  test("buildStructuredContext 标记 bot 自己发过的消息", () => {
+    const context = buildStructuredContext([{
+      ...baseEntry,
+      msgId: 4,
+      userId: 3042160393,
+      nickname: "Rin",
+      card: "Rin",
+      text: "草",
+    }]);
+
+    expect(context[0]).toMatchObject({
+      msg_id: 4,
+      sender: "Rin",
+      text: "草",
+      is_self: true,
+      is_latest: true,
+    });
+  });
+
   test("buildUserMessages 生成平铺的多条 user JSON 消息", () => {
     const messages = buildUserMessages({
       sessionType: "group",
@@ -1159,11 +1178,45 @@ describe("structured user message serialization", () => {
           session_type: "group",
           bot_user_id: 3042160393,
           bot_name: "Rin",
-          latest_message_rule: "context 中最后一条 is_latest=true 的消息就是当前待回复消息，回复时优先围绕它，而不是更早的消息。",
+          latest_message_rule: "latest_message 是当前待回复消息；它也在前面的 context 中以 is_latest=true 标记。回复时优先围绕 latest_message，而不是更早的消息。",
+          latest_message: {
+            time: "15:07",
+            sender: "我是铸币",
+            type: "image",
+            text: "早上好",
+            has_image: true,
+            image_phash: "21194165415303e0",
+          },
           continuation_hint: "你刚才回复过对方",
         }),
       },
     ]);
+  });
+
+  test("buildUserMessages 在最后一条 metadata 中带上最近自己的消息", () => {
+    const messages = buildUserMessages({
+      sessionType: "group",
+      context: [
+        { msg_id: 10, time: "15:05", sender: "Rin", is_self: true, type: "text", text: "草" },
+        { msg_id: 11, time: "15:06", sender: "阿黄", type: "text", text: "刚才那个包要换版本" },
+        { msg_id: 12, time: "15:07", sender: "Rin", is_self: true, type: "text", text: "笑死" },
+        { msg_id: 13, time: "15:08", sender: "阿黄", type: "text", text: "不是梗，是真的报错了", is_latest: true },
+      ],
+    });
+
+    const metadata = JSON.parse(messages.at(-1)!.content!);
+    expect(metadata.latest_message).toEqual({
+      msg_id: 13,
+      time: "15:08",
+      sender: "阿黄",
+      type: "text",
+      text: "不是梗，是真的报错了",
+    });
+    expect(metadata.recent_self_messages).toEqual([
+      { msg_id: 10, time: "15:05", text: "草" },
+      { msg_id: 12, time: "15:07", text: "笑死" },
+    ]);
+    expect(metadata.self_history_rule).toContain("避免连续重复");
   });
 });
 
@@ -1411,7 +1464,13 @@ describe("quickDecideSilence end-to-end (agent.ts)", () => {
       session_type: "group",
       bot_user_id: 3042160393,
       bot_name: "Rin",
-      latest_message_rule: "context 中最后一条 is_latest=true 的消息就是当前待回复消息，回复时优先围绕它，而不是更早的消息。",
+      latest_message_rule: "latest_message 是当前待回复消息；它也在前面的 context 中以 is_latest=true 标记。回复时优先围绕 latest_message，而不是更早的消息。",
+      latest_message: {
+        time: "12:01",
+        sender: "Bob",
+        type: "text",
+        text: "今天天气不错",
+      },
     });
   });
 
