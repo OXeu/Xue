@@ -1,136 +1,156 @@
-# Xue
+<h1 align="center">Xue</h1>
+<p align="center"><b>QQ 群聊/私聊 agent，带上下文记忆和图片理解</b><br>通过 OneBot 监听消息，维护会话上下文，并按 prompt、配置和概率策略决定是否回复。</p>
 
-QQ 群聊/私聊 agent。它通过 OneBot 协议监听消息、维护上下文、处理图片理解，并按配置决定是否回复。
+<p align="center">
+  <img src="https://img.shields.io/badge/runtime-Bun-black?logo=bun" alt="Bun">
+  <img src="https://img.shields.io/badge/language-TypeScript-blue?logo=typescript" alt="TypeScript">
+  <img src="https://img.shields.io/badge/protocol-OneBot-green" alt="OneBot">
+  <img src="https://img.shields.io/badge/status-private-lightgrey" alt="Private">
+</p>
 
-核心思路：把消息采集、上下文构建、回复决策和模型调用拆成可验证的模块。回复行为由 prompt、会话配置和概率策略共同约束，避免无关或过度频繁的发言。
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#quickstart">Quickstart</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#configuration">Configuration</a> ·
+  <a href="#commands">Commands</a> ·
+  <a href="#development">Development</a>
+</p>
 
-## 项目结构
+---
 
-```
-Xue/
-├── config/
-│   └── session-config.json  # 本地会话配置，已被 .gitignore 排除
-├── src/
-│   ├── agent/              # 主 agent：上下文 → 视觉问答 → LLM → 回复
-│   ├── listen/             # 消息监听器：记录 JSONL + 异步缓存图片到 images/
-│   ├── shared/             # agent/listen 共享事件和类型
-│   ├── phash.ts            # 感知哈希（dHash），用于不同分辨率下的相似图片去重（阈值 3）
-│   ├── simulate.ts         # 模拟重放：不调 LLM，只输出决策和 prompt，零成本评估
-│   ├── replay.ts           # 重放历史消息：调 LLM 生成实际回复，用于验证
-│   ├── clean-vision.ts     # 清洗视觉模型的 reasoning 输出，提取纯文本描述
-│   ├── image-cache.ts      # 图片缓存（data/prod/images/），供 replay 复用
-│   ├── image-download.ts   # 图片下载（fetch → base64 → mime），供 agent/replay 复用
-│   ├── cq-codes.ts         # CQ 码解析工具（@列表、@全体、纯文本剥离、消息类型估算）
-│   └── chat-utils.ts       # agent/replay 共享工具（关键词、气氛、风格、消息加载、视觉描述持久化）
-├── scripts/
-│   ├── start-agent.sh      # 后台启动 agent（写 PID、日志重定向）
-│   ├── stop-agent.sh       # 停止 agent
-│   └── status-agent.sh     # 检查 agent 状态
-├── tests/
-│   ├── clean-vision.test.ts
-│   ├── image-cache.test.ts
-│   ├── image-download.test.ts
-│   ├── listen.test.ts
-│   ├── listen-image-cache.test.ts
-│   ├── phash.test.ts
-│   └── agent/group-profile.test.ts   # 群聊特征 + 风格分析测试
-├── data/
-│   ├── raw/                # 监听器 JSONL（运行时生成）
-│   └── images/             # 图片缓存（listen 异步下载）
-├── .env                    # 配置（参考 .env.example）
-├── package.json
-└── tsconfig.json
-```
+> 群聊 agent 的难点不只是“能不能回复”，而是“什么时候该沉默、什么时候该补充上下文、什么时候图片需要先看清楚”。Xue 把消息采集、上下文构建、回复决策和模型调用拆开，让每一步都能被模拟、重放和测试。
 
-## 快速开始
+## Install
+
+### Requirements
+
+- Bun
+- OneBot 正向 WebSocket 网关
+- OpenAI-compatible 文本模型接口
+- OpenAI-compatible 视觉模型接口（图片理解需要）
+
+### From Source
 
 ```bash
-# 1. 配置
+bun install
 cp .env.example .env
-# 编辑 .env 填写 LLM_API_KEY、OneBot 连接信息
+```
 
-# 2. 启动监听器（积累上下文数据）
-bun src/listen/index.ts
+编辑 `.env`，填写 OneBot 连接信息、bot 身份和模型配置。
 
-# 3. 先用 simulate 快速评估 prompt 效果（零成本）
+## Quickstart
+
+### Collect Context
+
+先启动监听器，让 Xue 记录群聊/私聊消息并异步缓存图片。
+
+```bash
+bun run listen
+```
+
+监听器会写入运行时数据：
+
+- `data/prod/raw/`：消息 JSONL
+- `data/prod/images/`：图片缓存
+
+### Evaluate Prompts
+
+改 prompt 后先用零成本模拟筛选效果。
+
+```bash
 bun run simulate
+```
 
-# 待评估通过后，再用 replay 看实际 LLM 回复
+需要看真实模型输出时，再用历史消息重放。
+
+```bash
 LLM_API_KEY=sk-xxx bun run replay
-
-# 4. 启动 agent（处理实时消息并回复）
-bun run start-agent    # 后台持久化
-bun src/agent/main.ts  # 前台调试
 ```
 
-## 核心机制
+### Run Agent
 
-### 1. 群聊特征分析
-从历史消息中提取会话级特征，用于生成更贴近当前上下文的系统提示。
+前台调试：
 
-### 2. 风格分析
-统计消息长度、语气词、问句比例等特征，为回复风格提供轻量约束。
-
-### 3. 语气指导
-把会话特征转换为简短指导，附加到模型上下文中，减少和当前对话风格不一致的输出。
-
-### 4. 视觉问答（Agent 自主提问）
-
-当消息中包含图片时，Agent 不再使用固定的「用一句话简短描述」提示词。
-
-系统会在 system prompt 中加入指令，告诉 Agent 它可以**自己决定问什么**。
-格式是用 `[VISION]你的问题[/VISION]` 包裹问题文本，例如：
-
+```bash
+bun run agent
 ```
+
+后台运行：
+
+```bash
+bun run start-agent
+bun run status-agent
+```
+
+默认 `DRY_RUN=true`，未在 `config/session-config.json` 显式开启的会话只打印 dry-run 日志。确认行为收敛后，再按会话设置 `reply: true` 或全局设置 `DRY_RUN=false`。
+
+## Features
+
+### Context-Aware Replying
+
+Xue 从历史消息中提取会话级特征，并把群聊气氛、消息长度、语气词、问句比例等轻量风格信号注入 prompt。目标是让回复更贴近当前上下文，而不是脱离对话做总结。
+
+### Reply Decision Policy
+
+非 @ 场景下默认按概率控制发言频率，减少误入和刷屏。
+
+| 场景 | 默认概率 | 行为 |
+|------|----------|------|
+| @自己 / @全体 | `1.0` | 必回 |
+| 提到名字 | `0.7` | 大概率回 |
+| 纯表情/图片 | `0.1` | 低概率 |
+| 旁观（@别人） | `0.05` | 极低概率 |
+| 其他消息 | `0.3` | 由 `REPLY_CHANCE` 或会话配置覆盖 |
+
+### Vision Loop
+
+当消息包含图片时，agent 可以主动决定要问视觉模型什么，而不是固定让视觉模型“一句话描述图片”。
+
+```text
 [VISION]这张图里有几个人？[/VISION]
 ```
 
-系统拦截到这个标签后，会调用视觉模型（gemma4:26b）回答问题，
-然后把答案以「【图片回答】...」的形式注入回对话上下文。
-Agent 看到答案后，可以继续追问（再发一个 `[VISION]`），
-也可以直接输出回复。
+系统会拦截 `[VISION]...[/VISION]`，调用视觉模型，把结果以 `【图片回答】...` 注入回上下文。agent 可以继续追问，也可以直接回复。
 
-- 每轮最多 5 次问答
-- 每次问什么完全由 Agent 根据当前对话上下文自主决定
-- 视觉模型返回失败时会注入 `(分析失败)` 占位符
+- 每轮最多 5 次视觉问答
+- 视觉失败时注入 `(分析失败)`
+- replay 可复用已缓存的图片描述，降低重复成本
 
-### 5. 回复规则
-回复约束配置在 `prompts/reply.md`，每次回复时注入 system prompt。主要目标是：
+### Image Cache
+
+图片下载和缓存由 `src/image-download.ts`、`src/image-cache.ts` 复用。`src/phash.ts` 使用 dHash 做相似图片去重，默认阈值为 `3`，用于处理不同分辨率下的重复图。
+
+### Prompt Surface
+
+回复约束集中在 `prompts/reply.md`，并在每轮回复时作为 system prompt 注入。主要约束包括：
 
 - 控制回复长度和频率
 - 避免重复对方原话
-- 避免脱离上下文的总结或推断
-- 对信息不足、上下文不明确的消息保持保守
-- 对图片消息先通过视觉工具补充信息，再决定是否回复
+- 避免离开上下文做总结或推断
+- 信息不足时保持保守
+- 图片消息先通过视觉工具补充信息
 
-### 6. 回复决策
-非 @ 场景下分级控制回复概率（以下为默认值，可通过 `config/session-config.json` 按会话覆写）：
+## Configuration
 
-| 场景 | 默认回复概率 | 说明 |
-|------|-------------|------|
-| @自己 / @全体 | 100% | 必回 |
-| 提到名字 | 70% | 大概率回 |
-| 纯表情/图片 | 10% | 低概率 |
-| 旁观（@别人） | 5% | 极低概率，减少误入 |
-| 其他（random） | 30% | 可通过 `REPLY_CHANCE` 环境变量或 session 级 `replyChance` 覆写 |
+### Environment
 
-## 快速评估工作流
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `LLM_API_KEY` | LLM API Key | - |
+| `LLM_BASE_URL` | 文本模型 API 地址 | `https://api.deepseek.com/v1` |
+| `LLM_MODEL` | 文本模型 | `deepseek-v4-flash` |
+| `VISION_MODEL` | 视觉模型 | `gemma4:26b` |
+| `VISION_BASE_URL` | 视觉 API 地址 | `http://127.0.0.1:11444/v1` |
+| `ONEBOT_WS_URL` | OneBot 正向 WS 网关 | `ws://localhost:6700` |
+| `ONEBOT_ACCESS_TOKEN` | OneBot 鉴权 token | - |
+| `BOT_NAME` | Bot 名称 | - |
+| `BOT_QQ` | Bot QQ 号 | - |
+| `DRY_RUN` | 仅模拟不发送 | `true` |
 
-```bash
-# 1. 改完 prompt 后，先用 simulate 筛：
-bun run simulate
+### Session Config
 
-# 2. 找到你想关注的消息，用 replay 看实际回复：
-LLM_API_KEY=sk-xxx MAX_MSGS=22 bun run replay
-
-# 3. 观察回复是否收敛（短句、少语气词、自然）
-```
-
-## 会话配置 (`config/session-config.json`)
-
-按会话细粒度控制回复行为。格式为 JSON，支持三级优先级：**会话级配置 > 全局配置 > 代码默认值**。
-
-### 完整示例
+`config/session-config.json` 可按会话覆盖回复开关和概率。该文件已被 `.gitignore` 排除，适合保存本地私有配置。
 
 ```json
 {
@@ -154,73 +174,83 @@ LLM_API_KEY=sk-xxx MAX_MSGS=22 bun run replay
 }
 ```
 
-### 字段说明
+优先级：
+
+```text
+会话级 probabilities -> 全局 probabilities -> 代码默认值 (0.7 / 0.1 / 0.05)
+会话级 replyChance  -> 环境变量 REPLY_CHANCE -> 0.3
+DRY_RUN=false       -> 所有会话真实回复
+DRY_RUN=true        -> 只有 session reply=true 的会话真实回复
+```
+
+字段说明：
 
 | 路径 | 类型 | 说明 |
 |------|------|------|
-| `probabilities` | `object`（可选） | **全局**回复概率默认值。缺字段时回退到代码默认值。 |
-| `probabilities.mentioned` | `number` 0–1 | 被提到名字时的回复概率。默认 `0.7`。 |
-| `probabilities.media` | `number` 0–1 | 纯表情/图片消息的回复概率。默认 `0.1`。 |
-| `probabilities.bystander` | `number` 0–1 | 旁观（@ 别人）时的回复概率。默认 `0.05`。 |
-| `{session_id}` | `object`（可选） | 按会话 ID 配置。键名如 `group_A` 或 `private_A`。 |
-| `{session_id}.reply` | `boolean` | 真实回复开关。`true` = 覆写 `DRY_RUN` 环境变量，实际发送消息。 |
-| `{session_id}.probabilities` | `object`（可选） | **会话级**回复概率，覆盖全局 `probabilities`。缺字段回退到全局值。 |
-| `{session_id}.replyChance` | `number` 0–1（可选） | **会话级**「其他」（random）场景的回复概率，覆盖 `REPLY_CHANCE` 环境变量。默认 `0.3`。 |
+| `probabilities` | `object` | 全局回复概率默认值 |
+| `probabilities.mentioned` | `number` | 被提到名字时的回复概率 |
+| `probabilities.media` | `number` | 纯表情/图片消息的回复概率 |
+| `probabilities.bystander` | `number` | 旁观（@ 别人）时的回复概率 |
+| `{session_id}.reply` | `boolean` | 会话级真实回复开关 |
+| `{session_id}.probabilities` | `object` | 会话级回复概率覆盖 |
+| `{session_id}.replyChance` | `number` | 会话级 random 场景回复概率 |
 
-### 三级优先级规则
-
-```
-会话级 probabilities → 全局 probabilities → 代码默认值 (0.7 / 0.1 / 0.05)
-会话级 replyChance  → 环境变量 REPLY_CHANCE → 0.3
-会话级 reply        → 全局 DRY_RUN 环境变量 → true（仅模拟）
-```
-
-- 会话级 `probabilities` 可以只写想覆盖的字段，缺失的自动从全局回退
-- 全局 `probabilities` 不配置时所有字段使用代码默认值
-- 不在配置中的会话：`reply` 走全局 `DRY_RUN`，概率走全局 `probabilities`
-- `DRY_RUN=false` 时所有会话真实回复，不受 `reply: false` 限制
-
-### 配置生效示例
-
-```json
-{
-  "probabilities": { "mentioned": 0.7, "media": 0.1, "bystander": 0.05 },
-  "group_A": {
-    "reply": true,
-    "probabilities": { "mentioned": 0.5 },
-    "replyChance": 0.2
-  }
-}
-```
-
-- **group_A**：`mentioned=0.5`（会话级），`media=0.1`（全局），`bystander=0.05`（全局），`random=0.2`（会话级 `replyChance`），真实回复
-- **其他群**：使用全局全部默认值和 `DRY_RUN` 环境变量行为
-
-## 环境变量
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `LLM_API_KEY` | LLM API Key | — |
-| `LLM_BASE_URL` | API 地址 | `https://api.deepseek.com/v1` |
-| `LLM_MODEL` | 文本模型 | `deepseek-v4-flash` |
-| `VISION_MODEL` | 视觉模型 | `gemma4:26b` |
-| `VISION_BASE_URL` | 视觉 API 地址 | `http://127.0.0.1:11444/v1` |
-| `ONEBOT_WS_URL` | OneBot 正向 WS 网关 | `ws://localhost:6700` |
-| `ONEBOT_ACCESS_TOKEN` | WS 鉴权 token | — |
-| `BOT_NAME` | Bot 名称 | — |
-| `BOT_QQ` | Bot QQ 号 | — |
-| `DRY_RUN` | 仅模拟不发送 | `true`（调试用） |
-
-## 命令
+## Commands
 
 | 命令 | 作用 |
 |------|------|
-| `bun run agent` | 前台运行 agent（含视觉问答循环：`[VISION]` 自主提问） |
 | `bun run listen` | 前台运行监听器 |
-| `bun run simulate` | 模拟重放（零成本评估 prompt） |
-| `bun run replay` | 重放历史消息并调 LLM（视觉消息使用固定「一句话描述」缓存，非实时问答） |
+| `bun run agent` | 前台运行 agent |
+| `bun run simulate` | 模拟重放，不调用 LLM |
+| `bun run replay` | 历史消息重放，调用 LLM |
+| `bun run start` | 后台启动监听器 |
+| `bun run stop` | 停止监听器 |
+| `bun run status` | 检查监听器状态 |
 | `bun run start-agent` | 后台启动 agent |
 | `bun run stop-agent` | 停止 agent |
 | `bun run status-agent` | 检查 agent 状态 |
-| `bun test` | 运行测试（186 例） |
+| `bun test` | 运行测试 |
 | `bun run typecheck` | TypeScript 类型检查 |
+
+## Development
+
+### Project Layout
+
+```text
+Xue/
+├── config/
+│   └── session-config.json
+├── prompts/
+│   ├── reply.md
+│   ├── silence.md
+│   ├── system.md
+│   └── vision.md
+├── scripts/
+│   ├── start-agent.sh
+│   ├── start-listen.sh
+│   ├── status-agent.sh
+│   ├── status-listen.sh
+│   ├── stop-agent.sh
+│   └── stop-listen.sh
+├── src/
+│   ├── agent/          # 上下文、决策、OneBot 发送、视觉循环
+│   ├── listen/         # OneBot 消息监听和图片异步缓存
+│   ├── shared/         # 共享事件和类型
+│   ├── chat-utils.ts   # replay/agent 共享工具
+│   ├── image-cache.ts  # 图片缓存
+│   ├── image-download.ts
+│   ├── phash.ts
+│   ├── replay.ts
+│   └── simulate.ts
+├── tests/
+├── .env.example
+├── package.json
+└── tsconfig.json
+```
+
+### Test
+
+```bash
+bun test
+bun run typecheck
+```
